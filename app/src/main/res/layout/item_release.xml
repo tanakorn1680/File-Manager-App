@@ -9,10 +9,7 @@
     android:layout_marginTop="12dp"
     android:clickable="true"
     android:focusable="true"
-    app:cardBackgroundColor="@color/surface"
-    app:cardCornerRadius="8dp"
     app:rippleColor="@color/surface_hover"
-    app:strokeColor="@color/border"
     app:strokeWidth="1dp">
 
     <LinearLayout

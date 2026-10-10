@@ -1,6 +1,5 @@
 package com.releasemanager.ui
 
-import android.app.AlertDialog
 import android.content.Intent
 import android.os.Bundle
 import android.view.View
@@ -12,6 +11,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.google.android.material.button.MaterialButton
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
@@ -183,7 +183,7 @@ class MainActivity : AppCompatActivity() {
         val checkDraft = view.findViewById<android.widget.CheckBox>(R.id.checkDraft)
         val checkPrerelease = view.findViewById<android.widget.CheckBox>(R.id.checkPrerelease)
 
-        AlertDialog.Builder(this)
+        MaterialAlertDialogBuilder(this)
             .setTitle("New release")
             .setView(view)
             .setPositiveButton("Create") { _, _ ->

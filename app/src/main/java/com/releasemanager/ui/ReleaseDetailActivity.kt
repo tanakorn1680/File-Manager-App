@@ -1,6 +1,6 @@
 package com.releasemanager.ui
 
-import android.app.AlertDialog
+
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -16,6 +16,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.button.MaterialButton
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.releasemanager.R
 import com.releasemanager.data.GitHubApiException
 import com.releasemanager.data.ReleaseAsset
@@ -198,7 +199,7 @@ class ReleaseDetailActivity : AppCompatActivity() {
     // ── Delete ───────────────────────────────────────────────────────────
 
     private fun confirmDeleteAsset(asset: ReleaseAsset, position: Int) {
-        AlertDialog.Builder(this)
+        MaterialAlertDialogBuilder(this)
             .setTitle("Delete file?")
             .setMessage("Delete \"${asset.name}\" from this release?")
             .setPositiveButton("Delete") { _, _ -> deleteAsset(asset, position) }
@@ -220,7 +221,7 @@ class ReleaseDetailActivity : AppCompatActivity() {
     }
 
     private fun confirmDeleteRelease() {
-        AlertDialog.Builder(this)
+        MaterialAlertDialogBuilder(this)
             .setTitle("Delete release?")
             .setMessage("Delete this release and all its assets? This cannot be undone.")
             .setPositiveButton("Delete") { _, _ -> deleteRelease() }

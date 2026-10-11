@@ -29,6 +29,9 @@ class MainActivity : AppCompatActivity() {
     private var currentRepo: String? = null
     private var repos: List<RepoRef> = emptyList()
 
+    private lateinit var scrollConnection: androidx.core.widget.NestedScrollView
+    private lateinit var barConnectedStatus: View
+    private lateinit var textConnectedRepo: android.widget.TextView
     private lateinit var inputToken: TextInputEditText
     private lateinit var textConnectStatus: android.widget.TextView
     private lateinit var btnConnect: MaterialButton
@@ -47,6 +50,9 @@ class MainActivity : AppCompatActivity() {
 
         tokenStore = TokenStore(this)
 
+        scrollConnection = findViewById(R.id.scrollConnection)
+        barConnectedStatus = findViewById(R.id.barConnectedStatus)
+        textConnectedRepo = findViewById(R.id.textConnectedRepo)
         inputToken = findViewById(R.id.inputToken)
         textConnectStatus = findViewById(R.id.textConnectStatus)
         btnConnect = findViewById(R.id.btnConnect)
@@ -71,6 +77,7 @@ class MainActivity : AppCompatActivity() {
 
         btnConnect.setOnClickListener { connect() }
         swipeRefresh.setOnRefreshListener { loadReleases() }
+        barConnectedStatus.setOnClickListener { showConnectionScreen() }
         fabNewRelease.setOnClickListener { showNewReleaseDialog() }
 
         dropdownRepo.setOnItemClickListener { _, _, position, _ ->
@@ -157,6 +164,11 @@ class MainActivity : AppCompatActivity() {
     private fun loadReleases() {
         val client = api ?: return
         val repo = currentRepo ?: return
+        // Switching to the releases screen here (not right after connect())
+        // means a failed repo/release load leaves the connection card
+        // visible with its error message, instead of hiding it behind an
+        // empty releases screen the user would have no way to explain.
+        showReleasesScreen(repo)
         swipeRefresh.visibility = View.VISIBLE
         swipeRefresh.isRefreshing = true
         lifecycleScope.launch {
@@ -218,6 +230,26 @@ class MainActivity : AppCompatActivity() {
                 toast("Could not create release: ${e.message}")
             }
         }
+    }
+
+    // Swaps the full token/repo entry card for a compact "connected to
+    // X" strip plus the releases list. Without this the connection card
+    // stayed on screen permanently even after a successful connect — the
+    // bug that prompted this: "Connected: tanakorn1680" showing right
+    // above a Connect button that never went away.
+    private fun showReleasesScreen(repo: String) {
+        scrollConnection.visibility = View.GONE
+        barConnectedStatus.visibility = View.VISIBLE
+        textConnectedRepo.text = repo
+        swipeRefresh.visibility = View.VISIBLE
+    }
+
+    private fun showConnectionScreen() {
+        barConnectedStatus.visibility = View.GONE
+        scrollConnection.visibility = View.VISIBLE
+        swipeRefresh.visibility = View.GONE
+        fabNewRelease.visibility = View.GONE
+        textEmptyReleases.visibility = View.GONE
     }
 
     private fun setConnecting(connecting: Boolean) {

@@ -2,6 +2,7 @@
 <androidx.coordinatorlayout.widget.CoordinatorLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@color/bg">
@@ -19,6 +20,44 @@
             android:background="@color/surface"
             app:title="@string/app_name"
             app:titleTextColor="@color/text_primary" />
+
+        <!-- Shown only once connected, replacing the full Connection card
+             with a compact strip: which repo is active, and a way back to
+             the connection screen to switch accounts or repos. Tapping the
+             whole row re-opens the connection card (see btnSwitchAccount
+             in MainActivity). -->
+        <LinearLayout
+            android:id="@+id/barConnectedStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@color/bg"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingHorizontal="16dp"
+            android:paddingVertical="10dp"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/textConnectedRepo"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:ellipsize="middle"
+                android:maxLines="1"
+                android:textColor="@color/text_muted"
+                android:textSize="13sp"
+                tools:text="tanakorn1680/File-Manager-App" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Switch"
+                android:textColor="@color/accent"
+                android:textSize="13sp" />
+
+        </LinearLayout>
 
     </com.google.android.material.appbar.AppBarLayout>
 

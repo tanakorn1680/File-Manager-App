@@ -10,7 +10,7 @@ import kotlinx.coroutines.withContext
 import org.eclipse.jgit.api.Git
 import org.eclipse.jgit.api.errors.CanceledException
 import org.eclipse.jgit.api.errors.EmptyCommitException
-import org.eclipse.jgit.lib.NullProgressMonitor
+import org.eclipse.jgit.lib.BatchingProgressMonitor
 import org.eclipse.jgit.lib.PersonIdent
 import org.eclipse.jgit.storage.file.WindowCacheConfig
 import org.eclipse.jgit.transport.RefSpec
@@ -130,38 +130,31 @@ class GitSession private constructor(
         dir.parentFile?.deleteRecursively()
     }
 
+    /**
+     * Progress + cancellation for JGit. (NullProgressMonitor has a private constructor in this JGit version,
+     * so this extends BatchingProgressMonitor, which also throttles updates to about every half second.)
+     */
     private class Monitor(
         private val phase: GitPhase,
         private val label: String,
         private val job: Job?,
         private val report: (GitPhase, String, Int) -> Unit
-    ) : NullProgressMonitor() {
-        private var title = ""
-        private var total = 0
-        private var done = 0
-        private var last = -2
+    ) : BatchingProgressMonitor() {
 
-        override fun beginTask(title: String, totalWork: Int) {
-            this.title = title
-            total = totalWork
-            done = 0
-            last = -2
-            emit()
-        }
+        override fun onUpdate(taskName: String, workCurr: Int) = emit(taskName, -1)
 
-        override fun update(completed: Int) {
-            done += completed
-            emit()
-        }
+        override fun onEndTask(taskName: String, workCurr: Int) = emit(taskName, -1)
+
+        override fun onUpdate(taskName: String, workCurr: Int, workTotal: Int, percentDone: Int) =
+            emit(taskName, percentDone)
+
+        override fun onEndTask(taskName: String, workCurr: Int, workTotal: Int, percentDone: Int) =
+            emit(taskName, percentDone)
 
         override fun isCancelled(): Boolean = job?.isActive == false
 
-        private fun emit() {
-            val pct = if (total > 0) (done.toLong() * 100 / total).toInt() else -1
-            if (pct != last) {
-                last = pct
-                report(phase, if (pct >= 0) "$label — $title $pct%" else "$label — $title…", pct)
-            }
+        private fun emit(title: String, pct: Int) {
+            report(phase, if (pct >= 0) "$label — $title $pct%" else "$label — $title…", pct)
         }
     }
 

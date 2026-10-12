@@ -15,6 +15,7 @@ import com.releasemanager.R
 import com.releasemanager.data.EditMode
 import com.releasemanager.data.StagedFile
 import com.releasemanager.data.UploadItem
+import com.releasemanager.network.GitPhase
 import com.releasemanager.util.formatSize
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -189,38 +190,96 @@ class UploadScreen(private val ctx: AppContext) {
         progress2.progress = 0
         progressGroup.visibility = View.VISIBLE
 
-        ctx.api?.onRateLimitWait = { sec ->
-            if (sec > 0) setStatus(0, "GitHub rate limit — waiting ${sec}s, will continue…", Kind.WORKING)
-            else setStatus(0, "Uploading…", Kind.WORKING)
-        }
         ctx.launchSafe {
             try {
                 if (mode == Mode.ZIP) doZipUpload() else doFilesUpload()
             } finally {
-                ctx.api?.onRateLimitWait = null
                 uploading = false
                 btnDoUpload.isEnabled = true
             }
         }
     }
 
-    /** Web: doFilesUpload(). Reading is chunked so the whole selection is never in memory at once. */
+    /**
+     * Web: doFilesUpload(). Quick Edit works like Termux: clone, copy the files in, ONE commit, ONE git push —
+     * any number of files, any size up to GitHub's 100 MB, nothing read into memory. Stage Mode only queues.
+     */
     private suspend fun doFilesUpload() {
-        val api = ctx.api ?: return
-        val repo = state.currentRepo ?: return
+        if (state.editMode == EditMode.STAGE) doFilesStage() else doFilesPush()
+    }
+
+    private class PushSource(val path: String, val open: () -> java.io.InputStream)
+
+    /** Clone → copy every source in → one commit → one push. [onCopying] gets the index of the file being copied. */
+    private suspend fun pushSources(sources: List<PushSource>, message: String, onCopying: (Int) -> Unit) {
+        val api = ctx.api ?: throw IOException("Not connected to GitHub")
+        val repo = state.currentRepo ?: throw IOException("No repository selected")
         val branch = state.currentBranch
+        val total = sources.size
+        val session = api.openGitSession(act.cacheDir, repo, branch) { phase, text, pct ->
+            act.runOnUiThread {
+                label1.text = text
+                if (phase == GitPhase.PUSH && pct >= 0) setProgress(progress1, 0.5 + pct / 200.0)
+            }
+        }
+        try {
+            for ((i, src) in sources.withIndex()) {
+                label1.text = "Copying ${i + 1}/$total…"
+                onCopying(i)
+                session.addFile(src.path, src.open)
+                setProgress(progress1, (i + 1).toDouble() / total * 0.5)
+            }
+            session.commitAndPush(message)
+            setProgress(progress1, 1.0)
+        } finally {
+            session.close()
+        }
+    }
+
+    private suspend fun doFilesPush() {
         val dir = state.currentPath
         val files = picked
         val total = files.size
-        val stage = state.editMode == EditMode.STAGE
         val commitMsg = inputCommitMsg.text.toString().ifEmpty { "Upload files" }
 
-        label1.text = if (stage) "Staging files" else "Uploading files"
+        label1.text = "Uploading files"
+        label2.visibility = View.GONE
+        progress2.visibility = View.GONE
+
+        try {
+            val sources = files.map { f ->
+                PushSource(if (dir.isNotEmpty()) "$dir/${f.name}" else f.name) { openPicked(f) }
+            }
+            pushSources(sources, commitMsg) { i ->
+                setStatus(i, if (summaryMode) "Copying ${i + 1}/$total…" else "Copying…", Kind.WORKING)
+            }
+            if (summaryMode) setStatus(0, "✓ $total files", Kind.DONE)
+            else for (j in 0 until total) setStatus(j, "✓", Kind.DONE)
+            ctx.toast.success("$total file${if (total > 1) "s" else ""} uploaded")
+            delay(AFTER_UPLOAD_DELAY_MS)
+            backToFiles(false)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Nothing was committed: one push is all-or-nothing
+            if (summaryMode) setStatus(0, "Failed", Kind.ERROR)
+            else for (j in 0 until total) setStatus(j, "Failed", Kind.ERROR)
+            ctx.toast.error(e.userMessage(), 8000)
+        }
+    }
+
+    /** Stage Mode: files are read (in chunks) into memory and queued for "Commit all". */
+    private suspend fun doFilesStage() {
+        val dir = state.currentPath
+        val files = picked
+        val total = files.size
+
+        label1.text = "Staging files"
         label2.visibility = View.GONE
         progress2.visibility = View.GONE
 
         var i = 0
-        var committedUpTo = 0 // rows before this are done (staged or committed)
+        var doneUpTo = 0 // rows before this are staged
         try {
             while (i < total) {
                 val chunk = mutableListOf<Pair<Int, UploadItem>>() // (row index, item)
@@ -228,70 +287,37 @@ class UploadScreen(private val ctx: AppContext) {
                 while (i < total && chunk.size < READ_CHUNK_FILES && chunkChars < READ_CHUNK_CHARS) {
                     val f = files[i]
                     setStatus(i, if (summaryMode) "Reading ${i + 1}/$total…" else "Reading…", Kind.WORKING)
+                    val content = readBase64(f)
                     val targetPath = if (dir.isNotEmpty()) "$dir/${f.name}" else f.name
-                    val size = if (stage) f.size else sizeOf(f)
-                    if (!stage && size > STREAM_THRESHOLD_BYTES) {
-                        // Big file: streamed from the device while uploading, never read into memory
-                        if (size > GITHUB_MAX_FILE_BYTES) throw IOException(tooLargeMessage(f.name, size))
-                        chunk.add(i to UploadItem(targetPath, f.name, "", size, open = { openPicked(f) }))
-                        chunkChars += size / 3 * 4
-                    } else {
-                        val content = readBase64(f)
-                        chunk.add(i to UploadItem(targetPath, f.name, content))
-                        chunkChars += content.length
-                    }
+                    chunk.add(i to UploadItem(targetPath, f.name, content))
+                    chunkChars += content.length
                     i++
                 }
-                setProgress(progress1, i.toDouble() / total * 0.5)
-
-                if (stage) {
-                    // Stage Mode: queue in memory — nothing goes to GitHub yet
-                    for ((index, item) in chunk) {
-                        state.stagedFiles[item.path] = StagedFile(item.path, item.name, null, "file", "upload", item.content)
-                        if (!summaryMode) setStatus(index, "Staged", Kind.DONE)
-                    }
-                    if (summaryMode) setStatus(0, "$i/$total staged", Kind.WORKING)
-                    setProgress(progress1, 0.5 + i.toDouble() / total * 0.5)
-                } else {
-                    try {
-                        api.uploadFiles(repo, branch, chunk.map { it.second }, commitMsg)
-                        setProgress(progress1, 0.5 + i.toDouble() / total * 0.5)
-                        if (summaryMode) setStatus(0, "$i/$total uploaded…", Kind.WORKING)
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        chunk.forEach { setStatus(it.first, "Failed", Kind.ERROR) }
-                        throw e
-                    }
-                    if (!summaryMode) chunk.forEach { setStatus(it.first, "✓", Kind.DONE) }
+                for ((index, item) in chunk) {
+                    state.stagedFiles[item.path] = StagedFile(item.path, item.name, null, "file", "upload", item.content)
+                    if (!summaryMode) setStatus(index, "Staged", Kind.DONE)
                 }
-                committedUpTo = i
+                if (summaryMode) setStatus(0, "$i/$total staged", Kind.WORKING)
+                setProgress(progress1, i.toDouble() / total)
+                doneUpTo = i
             }
 
             setProgress(progress1, 1.0)
-            val plural = if (total > 1) "s" else ""
-            if (stage) {
-                ctx.files.updateStagedBadge()
-                ctx.toast.success("Staged $total file$plural — press Commit All to apply")
-            } else {
-                ctx.toast.success("$total file$plural uploaded")
-            }
+            ctx.files.updateStagedBadge()
+            ctx.toast.success("Staged $total file${if (total > 1) "s" else ""} — press Commit All to apply")
             delay(AFTER_UPLOAD_DELAY_MS)
-            backToFiles(stage)
+            backToFiles(true)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            // Rows that were never attempted must not stay on a stale "Reading…" / queued state
-            if (!summaryMode) for (j in committedUpTo until total) setStatus(j, "Failed", Kind.ERROR)
+            // Rows that were never attempted must not stay on a stale "Reading…" state
+            if (!summaryMode) for (j in doneUpTo until total) setStatus(j, "Failed", Kind.ERROR)
             ctx.toast.error(e.userMessage())
         }
     }
 
-    /** Web: doZipUpload(). Two bars: reading entries is fast, committing them is the slow part. */
+    /** Web: doZipUpload(). Quick Edit unpacks straight into one git push; Stage Mode queues in memory. */
     private suspend fun doZipUpload() {
-        val api = ctx.api ?: return
-        val repo = state.currentRepo ?: return
-        val branch = state.currentBranch
         val dir = state.currentPath
         val pick = picked.firstOrNull() ?: return
         val stage = state.editMode == EditMode.STAGE
@@ -329,53 +355,31 @@ class UploadScreen(private val ctx: AppContext) {
                 if (tooBig != null) throw IOException(tooLargeMessage(tooBig.name, tooBig.entry.size))
 
                 val total = targets.size
-                var read = 0
-                var uploaded = 0
-                if (!stage) {
-                    label2.visibility = View.VISIBLE
-                    progress2.visibility = View.VISIBLE
-                }
-
-                while (read < total) {
-                    val chunk = mutableListOf<UploadItem>()
-                    var chunkChars = 0L
-                    while (read < total && chunk.size < READ_CHUNK_FILES && chunkChars < READ_CHUNK_CHARS) {
-                        val t = targets[read]
-                        if (!stage && t.entry.size > STREAM_THRESHOLD_BYTES) {
-                            // Big entry: streamed out of the ZIP while uploading, never held in memory
-                            chunk.add(UploadItem(t.path, t.name, "", t.entry.size, open = { zip.getInputStream(t.entry) }))
-                            chunkChars += t.entry.size / 3 * 4
-                        } else {
+                if (stage) {
+                    var read = 0
+                    while (read < total) {
+                        val chunk = mutableListOf<UploadItem>()
+                        var chunkChars = 0L
+                        while (read < total && chunk.size < READ_CHUNK_FILES && chunkChars < READ_CHUNK_CHARS) {
+                            val t = targets[read]
                             val content = withContext(Dispatchers.IO) { readZipEntry(zip, t) }
                             chunk.add(UploadItem(t.path, t.name, content))
                             chunkChars += content.length
+                            read++
+                            setProgress(progress1, read.toDouble() / total)
                         }
-                        read++
-                        setProgress(progress1, read.toDouble() / total)
-                    }
-
-                    if (stage) {
-                        // Stage Mode: queue in memory — nothing goes to GitHub yet
                         chunk.forEach {
                             state.stagedFiles[it.path] = StagedFile(it.path, it.name, null, "file", "upload", it.content)
                         }
                         setStatus(0, "$read/$total staged", Kind.WORKING)
-                    } else {
-                        setStatus(0, "Uploading $uploaded/$total…", Kind.WORKING)
-                        api.uploadFiles(repo, branch, chunk, commitMsg)
-                        uploaded += chunk.size
-                        setProgress(progress2, uploaded.toDouble() / total)
-                        setStatus(0, "Uploading $uploaded/$total…", Kind.WORKING)
                     }
-                }
-
-                setProgress(progress1, 1.0)
-                if (!stage) setProgress(progress2, 1.0)
-                if (stage) {
+                    setProgress(progress1, 1.0)
                     setStatus(0, "$total files staged", Kind.DONE)
                     ctx.files.updateStagedBadge()
                     ctx.toast.success("Staged $total files from ZIP — press Commit All to apply")
                 } else {
+                    val sources = targets.map { t -> PushSource(t.path) { zip.getInputStream(t.entry) } }
+                    pushSources(sources, commitMsg) { i -> setStatus(0, "Copying ${i + 1}/$total…", Kind.WORKING) }
                     setStatus(0, "✓ $total files", Kind.DONE)
                     ctx.toast.success("Uploaded $total files from ZIP")
                 }
@@ -496,21 +500,6 @@ class UploadScreen(private val ctx: AppContext) {
     private fun openPicked(f: Picked): java.io.InputStream =
         act.contentResolver.openInputStream(f.uri) ?: throw IOException("Could not read \"${f.name}\"")
 
-    /** The picker gives no size for some providers (-1): count the bytes once, streaming. */
-    private suspend fun sizeOf(f: Picked): Long =
-        if (f.size >= 0) f.size else withContext(Dispatchers.IO) {
-            openPicked(f).use { input ->
-                val buf = ByteArray(64 * 1024)
-                var total = 0L
-                while (true) {
-                    val r = input.read(buf)
-                    if (r < 0) break
-                    total += r
-                }
-                total
-            }
-        }
-
     // ── UI helpers ───────────────────────────────────────────────────────────
 
     private fun setStatus(index: Int, text: String, kind: Kind) {
@@ -551,11 +540,8 @@ class UploadScreen(private val ctx: AppContext) {
         /** Stage Mode keeps whole files in memory until Commit All, so it stays bounded. */
         const val MAX_FILE_BYTES = 50L * 1024 * 1024
 
-        /** GitHub itself refuses files over 100 MB in a repository (blobs API and git push alike). */
+        /** GitHub itself refuses files over 100 MB in a repository, whatever tool is used. */
         const val GITHUB_MAX_FILE_BYTES = 100L * 1024 * 1024
-
-        /** Quick Edit: files bigger than this are streamed from disk instead of being read into memory. */
-        const val STREAM_THRESHOLD_BYTES = 8L * 1024 * 1024
 
         const val AFTER_UPLOAD_DELAY_MS = 1200L
     }

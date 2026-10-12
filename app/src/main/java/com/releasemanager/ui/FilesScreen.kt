@@ -8,6 +8,7 @@ import android.text.Spanned
 import android.text.style.StyleSpan
 import android.view.Gravity
 import android.view.LayoutInflater
+import android.util.Base64
 import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
@@ -771,8 +772,18 @@ class FilesScreen(private val ctx: AppContext) {
         ctx.launchSafe(onError = { ctx.toast.error(it.userMessage()) }) {
             try {
                 if (toUpsert.isNotEmpty()) {
-                    val items = toUpsert.map { UploadItem(it.path, it.name, it.content.orEmpty()) }
-                    api.uploadFiles(repo, branch, items, message)
+                    // One clone, one commit, one push for all staged files (like Termux)
+                    val session = api.openGitSession(ctx.activity.cacheDir, repo, branch) { _, text, _ ->
+                        if (!text.contains('%')) ctx.activity.runOnUiThread { ctx.toast.show(text) }
+                    }
+                    try {
+                        for (sf in toUpsert) {
+                            session.addBytes(sf.path, Base64.decode(sf.content.orEmpty(), Base64.DEFAULT))
+                        }
+                        session.commitAndPush(message)
+                    } finally {
+                        session.close()
+                    }
                     // Already on GitHub: if the deletions below fail, a retry must not re-send these
                     toUpsert.forEach { state.stagedFiles.remove(it.path) }
                 }

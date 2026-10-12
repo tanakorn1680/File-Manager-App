@@ -7,6 +7,8 @@ package com.releasemanager.data
  */
 class AppState {
     var repos: List<RepoRef> = emptyList()
+    var repoSortKey: RepoSortKey = RepoSortKey.UPDATED   // same as GitHub's sort=updated
+    var repoSortAsc: Boolean = false                      // false = high → low
     var currentRepo: String? = null
     var currentBranch: String = "main"
     var currentPath: String = ""

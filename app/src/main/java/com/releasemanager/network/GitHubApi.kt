@@ -326,6 +326,14 @@ class GitHubApi(private val token: String) {
      * read + tree + commit + ref update is retried with a small backoff, as on the web.
      */
     suspend fun uploadFiles(repo: String, branch: String, items: List<UploadItem>, message: String) {
+        try {
+            uploadFilesImpl(repo, branch, items, message)
+        } catch (e: OutOfMemoryError) {
+            throw GitHubApiException("Not enough memory to upload this many / this large files at once. Try fewer or smaller files.", 0)
+        }
+    }
+
+    private suspend fun uploadFilesImpl(repo: String, branch: String, items: List<UploadItem>, message: String) {
         val treeItems = JSONArray()
         val binaryItems = ArrayList<UploadItem>()
         // Decoding and UTF-8 checking up to a few MB is CPU work: keep it off the main thread
@@ -569,7 +577,9 @@ class GitHubApi(private val token: String) {
         fullName = o.getString("full_name"),
         private = o.getBoolean("private"),
         description = optStr(o, "description"),
-        defaultBranch = optStr(o, "default_branch") ?: "main"
+        defaultBranch = optStr(o, "default_branch") ?: "main",
+        sizeKb = o.optLong("size", 0L),
+        updatedAt = optStr(o, "pushed_at") ?: optStr(o, "updated_at") ?: ""
     )
 
     private fun parseRun(o: JSONObject): WorkflowRun = WorkflowRun(

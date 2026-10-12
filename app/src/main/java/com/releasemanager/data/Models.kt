@@ -27,7 +27,9 @@ data class RepoRef(
     val fullName: String,   // "owner/repo"
     val private: Boolean,
     val description: String? = null,
-    val defaultBranch: String = "main"
+    val defaultBranch: String = "main",
+    val sizeKb: Long = 0,           // GitHub reports repo size in KB
+    val updatedAt: String = ""      // pushed_at (falls back to updated_at); ISO-8601 sorts as text
 )
 
 data class GitHubUser(

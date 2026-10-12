@@ -15,7 +15,6 @@ import com.releasemanager.R
 import com.releasemanager.data.EditMode
 import com.releasemanager.data.StagedFile
 import com.releasemanager.data.UploadItem
-import com.releasemanager.network.uploadInBatches
 import com.releasemanager.util.formatSize
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -28,7 +27,7 @@ import java.util.zip.ZipFile
 
 /**
  * Web: #screen-upload — "Upload Files" and "Upload ZIP". Quick Edit commits straight to GitHub
- * (in batches, see UploadBatches.kt); Stage Mode only queues the files for "Commit all".
+ * (one commit per chunk read); Stage Mode only queues the files for "Commit all".
  */
 class UploadScreen(private val ctx: AppContext) {
 
@@ -174,7 +173,7 @@ class UploadScreen(private val ctx: AppContext) {
         if (uploading || picked.isEmpty()) return
 
         // Whole files are read into memory to be committed, so refuse the ones that cannot fit up front
-        // instead of failing half way through a batch
+        // instead of failing half way through
         if (mode == Mode.FILES) {
             val tooBig = picked.firstOrNull { it.size > MAX_FILE_BYTES }
             if (tooBig != null) {
@@ -230,7 +229,6 @@ class UploadScreen(private val ctx: AppContext) {
                     chunkChars += content.length
                     i++
                 }
-                val chunkStart = i - chunk.size
                 setProgress(progress1, i.toDouble() / total * 0.5)
 
                 if (stage) {
@@ -243,11 +241,9 @@ class UploadScreen(private val ctx: AppContext) {
                     setProgress(progress1, 0.5 + i.toDouble() / total * 0.5)
                 } else {
                     try {
-                        api.uploadInBatches(repo, branch, chunk.map { it.second }, commitMsg) { done, _ ->
-                            val overall = chunkStart + done
-                            setProgress(progress1, 0.5 + overall.toDouble() / total * 0.5)
-                            if (summaryMode) setStatus(0, "$overall/$total uploaded…", Kind.WORKING)
-                        }
+                        api.uploadFiles(repo, branch, chunk.map { it.second }, commitMsg)
+                        setProgress(progress1, 0.5 + i.toDouble() / total * 0.5)
+                        if (summaryMode) setStatus(0, "$i/$total uploaded…", Kind.WORKING)
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
@@ -347,11 +343,10 @@ class UploadScreen(private val ctx: AppContext) {
                         setStatus(0, "$read/$total staged", Kind.WORKING)
                     } else {
                         setStatus(0, "Uploading $uploaded/$total…", Kind.WORKING)
-                        api.uploadInBatches(repo, branch, chunk, commitMsg) { doneInChunk, _ ->
-                            setProgress(progress2, (uploaded + doneInChunk).toDouble() / total)
-                            setStatus(0, "Uploading ${uploaded + doneInChunk}/$total…", Kind.WORKING)
-                        }
+                        api.uploadFiles(repo, branch, chunk, commitMsg)
                         uploaded += chunk.size
+                        setProgress(progress2, uploaded.toDouble() / total)
+                        setStatus(0, "Uploading $uploaded/$total…", Kind.WORKING)
                     }
                 }
 
@@ -372,7 +367,7 @@ class UploadScreen(private val ctx: AppContext) {
             throw e
         } catch (e: Exception) {
             setStatus(0, "Failed", Kind.ERROR)
-            // ZIP errors carry batch / file-range detail that is worth reading in full
+            // Show ZIP errors for longer: they can be long
             ctx.toast.error(e.userMessage(), 8000)
         } finally {
             tempFile?.let { f -> withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) { f.delete() } }

@@ -1,13 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout
-    xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
+<!-- Web: .asset-row -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
+    android:background="@drawable/bg_row_flat"
+    android:gravity="center_vertical"
     android:orientation="horizontal"
-    android:paddingVertical="10dp"
-    android:gravity="center_vertical">
+    android:paddingTop="10dp"
+    android:paddingBottom="11dp">
 
     <TextView
         android:id="@+id/textAssetName"
@@ -24,20 +25,18 @@
         android:id="@+id/textAssetSize"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginStart="8dp"
+        android:layout_marginStart="10dp"
         android:textColor="@color/text_dim"
         android:textSize="12sp"
         tools:text="1.1 GB" />
 
     <ImageButton
         android:id="@+id/btnDeleteAsset"
-        android:layout_width="36dp"
-        android:layout_height="36dp"
-        android:layout_marginStart="4dp"
-        android:background="?attr/selectableItemBackgroundBorderless"
+        style="@style/App.IconButton"
+        android:layout_width="40dp"
+        android:layout_height="40dp"
+        android:layout_marginStart="10dp"
         android:contentDescription="Delete asset"
-        android:padding="8dp"
-        android:src="@android:drawable/ic_menu_delete"
-        app:tint="@color/danger" />
-
+        android:padding="11dp"
+        android:src="@drawable/ic_trash" />
 </LinearLayout>

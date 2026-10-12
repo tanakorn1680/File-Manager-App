@@ -10,6 +10,7 @@ import com.releasemanager.data.ReleaseAsset
 import com.releasemanager.util.formatSize
 
 class AssetAdapter(
+    private val onOpen: (ReleaseAsset) -> Unit,
     private val onDelete: (ReleaseAsset, Int) -> Unit
 ) : RecyclerView.Adapter<AssetAdapter.ViewHolder>() {
 
@@ -51,6 +52,7 @@ class AssetAdapter(
         val asset = items[position]
         holder.textName.text = asset.name
         holder.textSize.text = formatSize(asset.size)
+        holder.textName.setOnClickListener { onOpen(asset) }
         holder.btnDelete.setOnClickListener {
             onDelete(asset, holder.bindingAdapterPosition)
         }

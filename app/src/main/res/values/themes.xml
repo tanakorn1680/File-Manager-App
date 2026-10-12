@@ -9,95 +9,60 @@
         <item name="colorSurface">@color/surface</item>
         <item name="colorOnSurface">@color/text_primary</item>
         <item name="colorError">@color/danger</item>
-        <item name="android:statusBarColor">@color/bg</item>
+
+        <!-- Web accent-color / caret / selection handles are the accent blue -->
+        <item name="colorAccent">@color/accent</item>
+        <item name="colorControlActivated">@color/accent</item>
+        <item name="colorControlNormal">@color/text_muted</item>
+        <item name="colorControlHighlight">@color/border</item>
+        <item name="colorBackgroundFloating">@color/surface</item>
+
+        <item name="android:textColorPrimary">@color/text_primary</item>
+        <item name="android:textColorSecondary">@color/text_muted</item>
+        <item name="android:textColorHint">@color/text_dim</item>
+        <item name="android:colorBackground">@color/bg</item>
+
+        <!-- Status bar takes the topbar colour so the bar reads as one surface, as on the web -->
+        <item name="android:statusBarColor">@color/surface</item>
         <item name="android:navigationBarColor">@color/bg</item>
         <item name="android:windowBackground">@color/bg</item>
         <item name="android:windowLightStatusBar">false</item>
-        <!-- App wide default so every MaterialButton matches the web
-             app's button class without repeating this style on each
-             button in every layout file. -->
-        <item name="materialButtonStyle">@style/Widget.ReleaseManager.Button</item>
-        <item name="materialCardViewStyle">@style/Widget.ReleaseManager.Card</item>
-        <item name="materialAlertDialogTheme">@style/ThemeOverlay.ReleaseManager.Dialog</item>
+
+        <item name="materialButtonStyle">@style/Widget.App.Button</item>
     </style>
 
-    <!-- Dialogs use the surface color (not bg) for their background, a
-         6dp corner radius matching every other surface in the app, and
-         route their action buttons through the same button styles as
-         the rest of the app rather than Material's stock dialog button
-         look. -->
-    <style name="ThemeOverlay.ReleaseManager.Dialog" parent="ThemeOverlay.MaterialComponents.MaterialAlertDialog">
+    <!-- Web .dialog / .overlay.center: centred card over a 50% scrim -->
+    <style name="Theme.App.Dialog" parent="Theme.ReleaseManager">
+        <item name="android:windowIsFloating">true</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowBackground">@color/transparent</item>
+        <item name="android:windowFrame">@null</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:windowCloseOnTouchOutside">true</item>
+        <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:backgroundDimAmount">0.5</item>
+        <item name="android:windowAnimationStyle">@android:style/Animation.Dialog</item>
+        <item name="android:statusBarColor">@color/transparent</item>
+        <item name="android:navigationBarColor">@color/transparent</item>
+    </style>
+
+    <!-- Web .sheet / .overlay: bottom sheet with 20px top corners -->
+    <style name="Theme.App.BottomSheetDialog" parent="Theme.MaterialComponents.BottomSheetDialog">
+        <item name="bottomSheetStyle">@style/Widget.App.BottomSheet</item>
         <item name="colorSurface">@color/surface</item>
-        <item name="colorOnSurface">@color/text_primary</item>
-        <item name="colorPrimary">@color/accent</item>
-        <item name="materialAlertDialogTitleTextStyle">@style/ReleaseManager.Dialog.Title</item>
-        <item name="buttonBarPositiveButtonStyle">@style/Widget.ReleaseManager.Button.Text</item>
-        <item name="buttonBarNegativeButtonStyle">@style/Widget.ReleaseManager.Button.Text</item>
-        <item name="shapeAppearanceOverlay">@style/ShapeAppearance.ReleaseManager.Dialog</item>
+        <item name="android:navigationBarColor">@color/surface</item>
     </style>
 
-    <style name="ReleaseManager.Dialog.Title" parent="MaterialAlertDialog.MaterialComponents.Title.Text">
-        <item name="android:textColor">@color/text_primary</item>
+    <style name="Widget.App.BottomSheet" parent="Widget.MaterialComponents.BottomSheet.Modal">
+        <item name="backgroundTint">@color/surface</item>
+        <item name="shapeAppearanceOverlay">@style/ShapeAppearanceOverlay.App.BottomSheet</item>
     </style>
 
-    <style name="ShapeAppearance.ReleaseManager.Dialog" parent="">
-        <item name="cornerSize">8dp</item>
-    </style>
-
-    <!-- Mirrors the web app's button class exactly: height 44dp, 6dp
-         corner radius, font size 15sp, medium weight, no uppercase
-         transform, no elevation or shadow (flat, matching the web's
-         borderless flat background look). -->
-    <style name="Widget.ReleaseManager.Button" parent="Widget.MaterialComponents.Button">
-        <item name="android:textAllCaps">false</item>
-        <item name="android:letterSpacing">0</item>
-        <item name="android:textSize">15sp</item>
-        <item name="android:fontFamily">sans-serif-medium</item>
-        <item name="android:minHeight">44dp</item>
-        <item name="android:insetTop">0dp</item>
-        <item name="android:insetBottom">0dp</item>
-        <item name="cornerRadius">6dp</item>
-        <item name="elevation">0dp</item>
-        <item name="android:stateListAnimator">@null</item>
-        <item name="rippleColor">#33FFFFFF</item>
-    </style>
-
-    <!-- Outline button variant from the web: transparent background, 1dp
-         border using the border color, text in the primary text color
-         rather than the accent color. -->
-    <style name="Widget.ReleaseManager.Button.Outline" parent="Widget.MaterialComponents.Button.OutlinedButton">
-        <item name="android:textAllCaps">false</item>
-        <item name="android:letterSpacing">0</item>
-        <item name="android:textSize">15sp</item>
-        <item name="android:minHeight">44dp</item>
-        <item name="android:insetTop">0dp</item>
-        <item name="android:insetBottom">0dp</item>
-        <item name="cornerRadius">6dp</item>
-        <item name="strokeColor">@color/border</item>
-        <item name="strokeWidth">1dp</item>
-        <item name="android:textColor">@color/text_primary</item>
-        <item name="rippleColor">#1AFFFFFF</item>
-    </style>
-
-    <!-- Ghost/text button variant from the web: no background, no
-         border, accent colored text. Used for low emphasis actions
-         such as a dialog Cancel button. -->
-    <style name="Widget.ReleaseManager.Button.Text" parent="Widget.MaterialComponents.Button.TextButton">
-        <item name="android:textAllCaps">false</item>
-        <item name="android:letterSpacing">0</item>
-        <item name="android:textSize">15sp</item>
-        <item name="cornerRadius">6dp</item>
-        <item name="rippleColor">#1A58A6FF</item>
-    </style>
-
-    <!-- Mirrors the web app's card surfaces: 6dp radius (not Material's
-         usual larger default), 1dp border stroke, no elevation shadow,
-         since the web has none, just a flat background plus border. -->
-    <style name="Widget.ReleaseManager.Card" parent="Widget.MaterialComponents.CardView">
-        <item name="cardCornerRadius">6dp</item>
-        <item name="cardElevation">0dp</item>
-        <item name="strokeColor">@color/border</item>
-        <item name="strokeWidth">1dp</item>
-        <item name="cardBackgroundColor">@color/surface</item>
+    <style name="ShapeAppearanceOverlay.App.BottomSheet" parent="">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSizeTopLeft">20dp</item>
+        <item name="cornerSizeTopRight">20dp</item>
+        <item name="cornerSizeBottomLeft">0dp</item>
+        <item name="cornerSizeBottomRight">0dp</item>
     </style>
 </resources>

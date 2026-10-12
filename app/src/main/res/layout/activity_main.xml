@@ -12,6 +12,7 @@
     <include layout="@layout/screen_upload" />
     <include layout="@layout/screen_releases" />
     <include layout="@layout/screen_release_new" />
+    <include layout="@layout/screen_actions" />
     <include layout="@layout/view_toast" />
 
 </FrameLayout>

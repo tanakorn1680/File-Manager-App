@@ -11,6 +11,7 @@ import androidx.recyclerview.widget.RecyclerView
 import com.releasemanager.R
 import com.releasemanager.data.RunArtifact
 import com.releasemanager.data.WorkflowRun
+import com.releasemanager.network.RunLogReport
 import com.releasemanager.util.formatSize
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -81,13 +82,19 @@ class ActionsScreen(private val ctx: AppContext) {
     }
 
     private fun showRunSheet(repo: String, run: WorkflowRun, artifacts: List<RunArtifact>) {
+        val failed = isFailedRun(run)
         val items = mutableListOf<Dialogs.SheetItem>()
-        for (artifact in artifacts) {
+
+        // A failed run: the log is what the person came for, so it goes first
+        if (failed) addLogItems(items, repo, run, failed = true)
+
+        artifacts.forEachIndexed { index, artifact ->
             items.add(
                 Dialogs.SheetItem(
                     label = artifact.name,
                     iconRes = R.drawable.ic_download,
                     sub = if (artifact.expired) "Expired — GitHub has deleted it" else formatSize(artifact.size),
+                    separatorBefore = index == 0 && items.isNotEmpty(),
                     onClick = {
                         if (artifact.expired) {
                             ctx.toast.error("This artifact has expired")
@@ -98,16 +105,96 @@ class ActionsScreen(private val ctx: AppContext) {
                 )
             )
         }
+
+        if (!failed) addLogItems(items, repo, run, failed = false)
+
         items.add(
             Dialogs.SheetItem(
                 label = "Open on GitHub",
                 iconRes = R.drawable.ic_external,
                 sub = if (artifacts.isEmpty()) "No artifacts for this run" else null,
-                separatorBefore = artifacts.isNotEmpty(),
+                separatorBefore = items.isNotEmpty(),
                 onClick = { openInBrowser(run.htmlUrl) }
             )
         )
         Dialogs.sheet(act, run.title.ifBlank { run.workflowName }, items)
+    }
+
+    // ── Logs (only a finished run has them) ──────────────────────────────────
+
+    private fun isFailedRun(run: WorkflowRun): Boolean =
+        run.status == "completed" &&
+            (run.conclusion == "failure" || run.conclusion == "timed_out" || run.conclusion == "startup_failure")
+
+    private fun addLogItems(items: MutableList<Dialogs.SheetItem>, repo: String, run: WorkflowRun, failed: Boolean) {
+        if (run.status != "completed") return
+        items.add(
+            Dialogs.SheetItem(
+                label = if (failed) "Download failure log for AI" else "Download log for AI",
+                iconRes = R.drawable.ic_download,
+                sub = "One .txt: failed step, error lines and the end of the log",
+                iconTintRes = if (failed) R.color.danger else null,
+                separatorBefore = !failed && items.isNotEmpty(),
+                onClick = { saveAiLog(repo, run) }
+            )
+        )
+        items.add(
+            Dialogs.SheetItem(
+                label = "Download full logs (.zip)",
+                iconRes = R.drawable.ic_archive,
+                sub = "Raw log of every job",
+                onClick = { saveFullLogs(repo, run) }
+            )
+        )
+    }
+
+    private fun saveAiLog(repo: String, run: WorkflowRun) {
+        val fileName = "${repo.repoShortName()}-run${run.runNumber}-log.txt"
+        act.createDocument(fileName, "text/plain") { uri ->
+            if (uri == null) return@createDocument
+            writeAiLog(repo, run, fileName, uri)
+        }
+    }
+
+    private fun writeAiLog(repo: String, run: WorkflowRun, fileName: String, uri: Uri) {
+        val api = ctx.api ?: return
+        ctx.toast.show("Collecting log…")
+        ctx.launchSafe(onError = {
+            discardDocument(uri)
+            ctx.toast.error(it.userMessage())
+        }) {
+            val report = RunLogReport.build(api, repo, run)
+            withContext(Dispatchers.IO) {
+                val out = act.contentResolver.openOutputStream(uri, "w")
+                    ?: throw IOException("Could not open the destination file")
+                out.use { it.write(report.toByteArray(Charsets.UTF_8)) }
+            }
+            ctx.toast.success("Saved $fileName")
+        }
+    }
+
+    private fun saveFullLogs(repo: String, run: WorkflowRun) {
+        val fileName = "${repo.repoShortName()}-run${run.runNumber}-logs.zip"
+        act.createDocument(fileName, "application/zip") { uri ->
+            if (uri == null) return@createDocument
+            downloadFullLogs(repo, run, fileName, uri)
+        }
+    }
+
+    private fun downloadFullLogs(repo: String, run: WorkflowRun, fileName: String, uri: Uri) {
+        val api = ctx.api ?: return
+        ctx.toast.show("Downloading logs…")
+        ctx.launchSafe(onError = {
+            discardDocument(uri)
+            ctx.toast.error(it.userMessage())
+        }) {
+            withContext(Dispatchers.IO) {
+                val out = act.contentResolver.openOutputStream(uri, "w")
+                    ?: throw IOException("Could not open the destination file")
+                out.use { api.downloadRunLogs(repo, run.id, it) }
+            }
+            ctx.toast.success("Saved $fileName")
+        }
     }
 
     private fun openInBrowser(url: String) {

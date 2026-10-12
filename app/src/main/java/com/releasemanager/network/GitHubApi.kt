@@ -5,13 +5,17 @@ import com.releasemanager.data.DeleteTarget
 import com.releasemanager.data.FileContent
 import com.releasemanager.data.FileEntry
 import com.releasemanager.data.GitHubApiException
+import com.releasemanager.data.CommitInfo
 import com.releasemanager.data.GitHubUser
+import com.releasemanager.data.JobLog
 import com.releasemanager.data.Release
 import com.releasemanager.data.ReleaseAsset
 import com.releasemanager.data.RepoRef
 import com.releasemanager.data.RunArtifact
 import com.releasemanager.data.UploadItem
+import com.releasemanager.data.WorkflowJob
 import com.releasemanager.data.WorkflowRun
+import com.releasemanager.data.WorkflowStep
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -461,6 +465,156 @@ class GitHubApi(private val token: String) {
         }
     }
 
+    /** Jobs of a run (latest attempt) with their steps — tells which step failed. */
+    suspend fun listRunJobs(repo: String, runId: Long): List<WorkflowJob> {
+        val data = call(
+            authedRequest("https://api.github.com/repos/$repo/actions/runs/$runId/jobs?per_page=100&filter=latest").get().build()
+        ) as? JSONObject ?: return emptyList()
+        val arr = data.optJSONArray("jobs") ?: return emptyList()
+        return (0 until arr.length()).map { i ->
+            val j = arr.getJSONObject(i)
+            val stepsArr = j.optJSONArray("steps") ?: JSONArray()
+            WorkflowJob(
+                id = j.getLong("id"),
+                name = optStr(j, "name") ?: "job",
+                status = optStr(j, "status") ?: "",
+                conclusion = optStr(j, "conclusion"),
+                steps = (0 until stepsArr.length()).map { k ->
+                    val st = stepsArr.getJSONObject(k)
+                    WorkflowStep(
+                        number = st.optInt("number", k + 1),
+                        name = optStr(st, "name") ?: "step",
+                        status = optStr(st, "status") ?: "",
+                        conclusion = optStr(st, "conclusion")
+                    )
+                }
+            )
+        }
+    }
+
+    /**
+     * Error / warning annotations of a job — the lines GitHub shows in red on the run page
+     * ("Process completed with exit code 1", compiler errors, invalid workflow syntax ...).
+     */
+    suspend fun listJobAnnotations(repo: String, jobId: Long): List<String> {
+        val arr = call(
+            authedRequest("https://api.github.com/repos/$repo/check-runs/$jobId/annotations?per_page=50").get().build()
+        ) as? JSONArray ?: return emptyList()
+        return (0 until arr.length()).mapNotNull { i ->
+            val a = arr.getJSONObject(i)
+            val level = optStr(a, "annotation_level") ?: return@mapNotNull null
+            if (level == "notice") return@mapNotNull null
+            val path = optStr(a, "path").orEmpty()
+            val line = a.optInt("start_line", 0)
+            val msg = optStr(a, "message").orEmpty().trim()
+            val where = if (path.isNotEmpty() && path != ".github") {
+                path + (if (line > 0) ":$line" else "") + " — "
+            } else {
+                ""
+            }
+            "[$level] $where$msg"
+        }
+    }
+
+    /**
+     * Streams one job's log and keeps only what matters: the last [tailLines] lines and every
+     * line that looks like an error (so a huge Gradle log never has to fit in memory).
+     * Timestamps and colour codes are stripped to keep the text short for an AI.
+     */
+    suspend fun fetchJobLog(repo: String, jobId: Long, tailLines: Int): JobLog = withContext(Dispatchers.IO) {
+        val req = authedRequest("https://api.github.com/repos/$repo/actions/jobs/$jobId/logs").get().build()
+        client.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) {
+                val bodyStr = resp.body?.string().orEmpty()
+                throw GitHubApiException(errorMessage(bodyStr, resp.code), resp.code)
+            }
+            val body = resp.body ?: throw GitHubApiException("Empty response from GitHub", 0)
+            val tail = ArrayDeque<String>()
+            val errors = LinkedHashSet<String>()
+            var total = 0
+            body.charStream().useLines { lines ->
+                for (raw in lines) {
+                    val line = LOG_ANSI.replace(LOG_TIMESTAMP.replace(raw, ""), "")
+                    total++
+                    tail.addLast(line)
+                    if (tail.size > tailLines) tail.removeFirst()
+                    if (errors.size < MAX_LOG_ERRORS) {
+                        when {
+                            line.contains("##[error]") -> errors.add(line.substringAfter("##[error]").trim())
+                            line.startsWith("e: ") || line.contains(": error:") -> errors.add(line.trim())
+                        }
+                    }
+                }
+            }
+            JobLog(tail = tail.toList(), errors = errors.filter { it.isNotEmpty() }, totalLines = total)
+        }
+    }
+
+    /** Streams the ZIP with the raw logs of every job of a run into [sink] (does not close it). */
+    suspend fun downloadRunLogs(repo: String, runId: Long, sink: OutputStream) {
+        withContext(Dispatchers.IO) {
+            val req = authedRequest("https://api.github.com/repos/$repo/actions/runs/$runId/logs").get().build()
+            client.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) {
+                    val bodyStr = resp.body?.string().orEmpty()
+                    throw GitHubApiException(errorMessage(bodyStr, resp.code), resp.code)
+                }
+                val body = resp.body ?: throw GitHubApiException("Empty response from GitHub", 0)
+                body.byteStream().copyTo(sink)
+            }
+        }
+    }
+
+    // ── History: commits of a branch, and going back to one of them ──────
+
+    /** One page of a branch's commits, newest first. */
+    suspend fun listCommits(repo: String, branch: String, page: Int, perPage: Int = 30): List<CommitInfo> {
+        val url = "https://api.github.com/repos/$repo/commits?sha=${urlEncode(branch)}&per_page=$perPage&page=$page"
+        val arr = call(authedRequest(url).get().build()) as? JSONArray ?: return emptyList()
+        return (0 until arr.length()).map { i ->
+            val o = arr.getJSONObject(i)
+            val c = o.getJSONObject("commit")
+            val gitAuthor = c.optJSONObject("author")
+            val login = o.optJSONObject("author")?.let { optStr(it, "login") }
+            CommitInfo(
+                sha = o.getString("sha"),
+                message = optStr(c, "message").orEmpty(),
+                author = login ?: gitAuthor?.let { optStr(it, "name") }.orEmpty(),
+                date = gitAuthor?.let { optStr(it, "date") }.orEmpty(),
+                htmlUrl = optStr(o, "html_url").orEmpty()
+            )
+        }
+    }
+
+    /**
+     * Puts the branch back to exactly how it looked at [targetSha] — without rewriting history:
+     * a NEW commit is added on top whose file tree is the old commit's tree (a normal
+     * fast-forward, no force push), so the restore itself can be undone the same way.
+     */
+    suspend fun restoreToCommit(repo: String, branch: String, targetSha: String, message: String) {
+        val (headSha, _) = getBranchTree(repo, branch)
+        if (headSha == targetSha) throw GitHubApiException("That is already the current version", 0)
+
+        val target = call(
+            authedRequest("https://api.github.com/repos/$repo/git/commits/$targetSha").get().build()
+        ) as JSONObject
+        val treeSha = target.getJSONObject("tree").getString("sha")
+
+        val commitPayload = JSONObject()
+            .put("message", message)
+            .put("tree", treeSha)
+            .put("parents", JSONArray().put(headSha))
+        val commit = call(
+            authedRequest("https://api.github.com/repos/$repo/git/commits").post(jsonBody(commitPayload)).build()
+        ) as JSONObject
+
+        val refPayload = JSONObject().put("sha", commit.getString("sha"))
+        call(
+            authedRequest("https://api.github.com/repos/$repo/git/refs/heads/${encodePath(branch)}")
+                .patch(jsonBody(refPayload)).build()
+        )
+    }
+
     // ── Releases ─────────────────────────────────────────────────────────
 
     suspend fun listReleases(repo: String): List<Release> {
@@ -600,7 +754,8 @@ class GitHubApi(private val token: String) {
         runNumber = o.optInt("run_number", 0),
         actor = o.optJSONObject("actor")?.let { optStr(it, "login") } ?: "",
         createdAt = optStr(o, "run_started_at") ?: optStr(o, "created_at") ?: "",
-        htmlUrl = optStr(o, "html_url") ?: ""
+        htmlUrl = optStr(o, "html_url") ?: "",
+        headSha = optStr(o, "head_sha") ?: ""
     )
 
     private fun parseRelease(o: JSONObject): Release {
@@ -631,6 +786,14 @@ class GitHubApi(private val token: String) {
         const val MAX_RATE_LIMIT_WAITS = 40
         const val MAX_RATE_LIMIT_WAIT_SEC = 3_700L
 
+        /** Error lines kept per job log. */
+        const val MAX_LOG_ERRORS = 60
+
+        /** "2026-10-13T08:15:30.1234567Z " that GitHub puts in front of every log line (and a BOM on the first). */
+        val LOG_TIMESTAMP = Regex("^\\uFEFF?\\d{4}-\\d{2}-\\d{2}T[\\d:.]+Z ?")
+
+        /** Colour / cursor escape sequences. */
+        val LOG_ANSI = Regex("\\u001B\\[[0-9;]*[A-Za-z]")
     }
 }
 

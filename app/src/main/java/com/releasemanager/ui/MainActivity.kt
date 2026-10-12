@@ -111,6 +111,7 @@ class MainActivity : AppCompatActivity() {
         roots[Screen.RELEASES] = findViewById(R.id.screenReleases)
         roots[Screen.RELEASE_NEW] = findViewById(R.id.screenReleaseNew)
         roots[Screen.ACTIONS] = findViewById(R.id.screenActions)
+        roots[Screen.HISTORY] = findViewById(R.id.screenHistory)
 
         ctx.connect = ConnectScreen(ctx)
         ctx.repos = ReposScreen(ctx)
@@ -120,6 +121,7 @@ class MainActivity : AppCompatActivity() {
         ctx.releases = ReleasesScreen(ctx)
         ctx.releaseNew = ReleaseNewScreen(ctx)
         ctx.actions = ActionsScreen(ctx)
+        ctx.history = HistoryScreen(ctx)
 
         showScreen(Screen.CONNECT)
 
@@ -158,6 +160,7 @@ class MainActivity : AppCompatActivity() {
             Screen.RELEASES -> showScreen(Screen.FILES)
             Screen.RELEASE_NEW -> showScreen(Screen.RELEASES)
             Screen.ACTIONS -> showScreen(Screen.FILES)
+            Screen.HISTORY -> showScreen(Screen.FILES)
         }
     }
 }

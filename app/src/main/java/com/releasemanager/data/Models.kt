@@ -59,7 +59,8 @@ data class WorkflowRun(
     val runNumber: Int,
     val actor: String,
     val createdAt: String,      // ISO-8601, UTC
-    val htmlUrl: String
+    val htmlUrl: String,
+    val headSha: String = ""    // commit the run was triggered for
 )
 
 /** A file bundle a run uploaded with actions/upload-artifact; downloads as a ZIP. */
@@ -69,6 +70,42 @@ data class RunArtifact(
     val size: Long,
     val expired: Boolean
 )
+
+/** One step of a workflow job (GET /repos/:repo/actions/runs/:id/jobs). */
+data class WorkflowStep(
+    val number: Int,
+    val name: String,
+    val status: String,
+    val conclusion: String?
+)
+
+/** One job of a workflow run, with its steps — tells which step failed. */
+data class WorkflowJob(
+    val id: Long,
+    val name: String,
+    val status: String,
+    val conclusion: String?,
+    val steps: List<WorkflowStep>
+)
+
+/** The useful part of a job log: the last lines, plus every line that looks like an error. */
+data class JobLog(
+    val tail: List<String>,
+    val errors: List<String>,
+    val totalLines: Int
+)
+
+/** One commit of a branch (GET /repos/:repo/commits) — one entry of the edit history. */
+data class CommitInfo(
+    val sha: String,
+    val message: String,
+    val author: String,
+    val date: String,       // ISO-8601, UTC
+    val htmlUrl: String
+) {
+    val shortSha: String get() = sha.take(7)
+    val title: String get() = message.lineSequence().firstOrNull().orEmpty().trim()
+}
 
 /** Text file fetched for the editor (web: getFile()). */
 data class FileContent(

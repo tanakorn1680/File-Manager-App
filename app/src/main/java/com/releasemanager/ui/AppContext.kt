@@ -10,7 +10,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 /** The web's `.screen` sections; MainActivity shows exactly one at a time (web: showScreen()). */
-enum class Screen { CONNECT, REPOS, FILES, EDITOR, UPLOAD, RELEASES, RELEASE_NEW, ACTIONS }
+enum class Screen { CONNECT, REPOS, FILES, EDITOR, UPLOAD, RELEASES, RELEASE_NEW, ACTIONS, HISTORY }
 
 /**
  * Everything the screen controllers share: the web's `state` object, the API client, the toast,
@@ -32,6 +32,7 @@ class AppContext(
     lateinit var releases: ReleasesScreen
     lateinit var releaseNew: ReleaseNewScreen
     lateinit var actions: ActionsScreen
+    lateinit var history: HistoryScreen
 
     val scope: CoroutineScope get() = activity.lifecycleScope
 

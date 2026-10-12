@@ -1,55 +1,81 @@
 <?xml version="1.0" encoding="utf-8"?>
-<com.google.android.material.card.MaterialCardView
-    xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
+<!-- Web: releases list rows reuse .repo-item: tag pill, name, Draft / Pre-release badges, asset count -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:layout_marginHorizontal="16dp"
-    android:layout_marginTop="12dp"
+    android:background="@drawable/bg_row"
     android:clickable="true"
     android:focusable="true"
-    app:rippleColor="@color/surface_hover"
-    app:strokeWidth="1dp">
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:paddingStart="16dp"
+    android:paddingTop="14dp"
+    android:paddingEnd="16dp"
+    android:paddingBottom="14dp">
 
-    <LinearLayout
-        android:layout_width="match_parent"
+    <TextView
+        android:id="@+id/textTag"
+        android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:padding="14dp"
-        android:gravity="center_vertical">
+        android:background="@drawable/bg_tag_pill"
+        android:fontFamily="monospace"
+        android:paddingStart="10dp"
+        android:paddingTop="2dp"
+        android:paddingEnd="10dp"
+        android:paddingBottom="2dp"
+        android:textColor="@color/accent"
+        android:textSize="12sp"
+        tools:text="v1.0" />
 
-        <TextView
-            android:id="@+id/textTag"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:background="@drawable/bg_tag_pill"
-            android:fontFamily="monospace"
-            android:paddingHorizontal="10dp"
-            android:paddingVertical="3dp"
-            android:textColor="@color/accent"
-            android:textSize="12sp"
-            tools:text="v1.0" />
+    <TextView
+        android:id="@+id/textName"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="12dp"
+        android:layout_weight="1"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:textColor="@color/text_primary"
+        android:textSize="15sp"
+        tools:text="Game Assets v1" />
 
-        <TextView
-            android:id="@+id/textName"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="10dp"
-            android:layout_weight="1"
-            android:ellipsize="end"
-            android:maxLines="1"
-            android:textColor="@color/text_primary"
-            android:textSize="14sp"
-            tools:text="Game Assets v1" />
+    <TextView
+        android:id="@+id/textDraft"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="12dp"
+        android:background="@drawable/bg_badge_release"
+        android:paddingStart="8dp"
+        android:paddingTop="1dp"
+        android:paddingEnd="8dp"
+        android:paddingBottom="1dp"
+        android:text="Draft"
+        android:textColor="@color/text_dim"
+        android:textSize="11sp"
+        android:visibility="gone" />
 
-        <TextView
-            android:id="@+id/textAssetCount"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:textColor="@color/text_dim"
-            android:textSize="12sp"
-            tools:text="2 assets" />
+    <TextView
+        android:id="@+id/textPrerelease"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="12dp"
+        android:background="@drawable/bg_badge_release"
+        android:paddingStart="8dp"
+        android:paddingTop="1dp"
+        android:paddingEnd="8dp"
+        android:paddingBottom="1dp"
+        android:text="Pre-release"
+        android:textColor="@color/text_dim"
+        android:textSize="11sp"
+        android:visibility="gone" />
 
-    </LinearLayout>
-</com.google.android.material.card.MaterialCardView>
+    <TextView
+        android:id="@+id/textAssetCount"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="12dp"
+        android:textColor="@color/text_dim"
+        android:textSize="12sp"
+        tools:text="2 assets" />
+</LinearLayout>

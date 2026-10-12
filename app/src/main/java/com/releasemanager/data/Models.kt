@@ -81,7 +81,7 @@ data class DeleteTarget(
     val isDir: Boolean
 )
 
-/** A file ready to be committed: `content` is base64 (web: items passed to uploadInBatches). */
+/** A file ready to be committed: `content` is base64. */
 data class UploadItem(
     val path: String,
     val name: String,

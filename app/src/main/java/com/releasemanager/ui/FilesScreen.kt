@@ -32,7 +32,6 @@ import com.releasemanager.data.FileEntry
 import com.releasemanager.data.GitHubApiException
 import com.releasemanager.data.StagedFile
 import com.releasemanager.data.UploadItem
-import com.releasemanager.network.uploadInBatches
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.withContext
@@ -770,7 +769,7 @@ class FilesScreen(private val ctx: AppContext) {
             try {
                 if (toUpsert.isNotEmpty()) {
                     val items = toUpsert.map { UploadItem(it.path, it.name, it.content.orEmpty()) }
-                    api.uploadInBatches(repo, branch, items, message)
+                    api.uploadFiles(repo, branch, items, message)
                     // Already on GitHub: if the deletions below fail, a retry must not re-send these
                     toUpsert.forEach { state.stagedFiles.remove(it.path) }
                 }

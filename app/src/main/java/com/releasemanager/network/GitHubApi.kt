@@ -9,7 +9,9 @@ import com.releasemanager.data.GitHubUser
 import com.releasemanager.data.Release
 import com.releasemanager.data.ReleaseAsset
 import com.releasemanager.data.RepoRef
+import com.releasemanager.data.RunArtifact
 import com.releasemanager.data.UploadItem
+import com.releasemanager.data.WorkflowRun
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -164,6 +166,18 @@ class GitHubApi(private val token: String) {
     suspend fun deleteRepo(repo: String) {
         // GitHub DELETE /repos/:owner/:repo returns 204 No Content
         call(authedRequest("https://api.github.com/repos/$repo").delete().build())
+    }
+
+    /** Renames a repository (same owner). GitHub keeps redirecting the old name; the new RepoRef carries the new full name. */
+    suspend fun renameRepo(repo: String, newName: String): RepoRef {
+        val name = newName.trim()
+        if (!Regex("^[a-zA-Z0-9._-]+$").matches(name)) {
+            throw GitHubApiException("Invalid repository name. Use letters, numbers, hyphens, underscores, or dots.", 0)
+        }
+        val payload = JSONObject().put("name", name)
+        val json = call(authedRequest("https://api.github.com/repos/$repo").patch(jsonBody(payload)).build()) as? JSONObject
+            ?: throw GitHubApiException("Empty response from GitHub", 0)
+        return parseRepo(json)
     }
 
     // ── Branches / tree / file ───────────────────────────────────────────
@@ -415,6 +429,50 @@ class GitHubApi(private val token: String) {
             if (e.httpStatus == 404) false else throw e
         }
 
+    // ── Actions (workflow runs and their artifacts) ──────────────────────
+
+    /** Latest workflow runs of the repository, newest first. */
+    suspend fun listWorkflowRuns(repo: String, perPage: Int = 30): List<WorkflowRun> {
+        val req = authedRequest("https://api.github.com/repos/$repo/actions/runs?per_page=$perPage").get().build()
+        val json = execute(req) ?: throw GitHubApiException("Empty response from GitHub", 0)
+        val arr = json.optJSONArray("workflow_runs") ?: JSONArray()
+        return (0 until arr.length()).map { i -> parseRun(arr.getJSONObject(i)) }
+    }
+
+    /** Artifacts a run uploaded (actions/upload-artifact). Expired ones are listed but cannot be downloaded. */
+    suspend fun listRunArtifacts(repo: String, runId: Long): List<RunArtifact> {
+        val req = authedRequest("https://api.github.com/repos/$repo/actions/runs/$runId/artifacts?per_page=100").get().build()
+        val json = execute(req) ?: throw GitHubApiException("Empty response from GitHub", 0)
+        val arr = json.optJSONArray("artifacts") ?: JSONArray()
+        return (0 until arr.length()).map { i ->
+            val a = arr.getJSONObject(i)
+            RunArtifact(
+                id = a.getLong("id"),
+                name = a.getString("name"),
+                size = a.optLong("size_in_bytes", 0L),
+                expired = a.optBoolean("expired", false)
+            )
+        }
+    }
+
+    /**
+     * Streams an artifact's ZIP into [sink] (does not close it). GitHub answers with a redirect to
+     * temporary storage; OkHttp follows it and drops the Authorization header for the other host.
+     */
+    suspend fun downloadArtifact(repo: String, artifactId: Long, sink: OutputStream) {
+        withContext(Dispatchers.IO) {
+            val req = authedRequest("https://api.github.com/repos/$repo/actions/artifacts/$artifactId/zip").get().build()
+            client.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) {
+                    val bodyStr = resp.body?.string().orEmpty()
+                    throw GitHubApiException(errorMessage(bodyStr, resp.code), resp.code)
+                }
+                val body = resp.body ?: throw GitHubApiException("Empty response from GitHub", 0)
+                body.byteStream().copyTo(sink)
+            }
+        }
+    }
+
     // ── Releases ─────────────────────────────────────────────────────────
 
     suspend fun listReleases(repo: String): List<Release> {
@@ -512,6 +570,20 @@ class GitHubApi(private val token: String) {
         private = o.getBoolean("private"),
         description = optStr(o, "description"),
         defaultBranch = optStr(o, "default_branch") ?: "main"
+    )
+
+    private fun parseRun(o: JSONObject): WorkflowRun = WorkflowRun(
+        id = o.getLong("id"),
+        workflowName = optStr(o, "name") ?: "Workflow",
+        title = optStr(o, "display_title") ?: optStr(o, "name") ?: "",
+        branch = optStr(o, "head_branch") ?: "",
+        event = optStr(o, "event") ?: "",
+        status = optStr(o, "status") ?: "",
+        conclusion = optStr(o, "conclusion"),
+        runNumber = o.optInt("run_number", 0),
+        actor = o.optJSONObject("actor")?.let { optStr(it, "login") } ?: "",
+        createdAt = optStr(o, "run_started_at") ?: optStr(o, "created_at") ?: "",
+        htmlUrl = optStr(o, "html_url") ?: ""
     )
 
     private fun parseRelease(o: JSONObject): Release {

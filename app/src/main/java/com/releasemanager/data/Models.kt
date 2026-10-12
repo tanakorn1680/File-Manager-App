@@ -45,6 +45,29 @@ data class FileEntry(
     val isDir: Boolean get() = type == "dir"
 }
 
+/** One GitHub Actions workflow run (GET /repos/:repo/actions/runs). App-only: the web has no Actions view. */
+data class WorkflowRun(
+    val id: Long,
+    val workflowName: String,
+    val title: String,          // display_title: the commit message / PR title that triggered the run
+    val branch: String,
+    val event: String,          // push, workflow_dispatch, pull_request, ...
+    val status: String,         // queued | in_progress | completed | waiting | ...
+    val conclusion: String?,    // success | failure | cancelled | skipped | ...; null until completed
+    val runNumber: Int,
+    val actor: String,
+    val createdAt: String,      // ISO-8601, UTC
+    val htmlUrl: String
+)
+
+/** A file bundle a run uploaded with actions/upload-artifact; downloads as a ZIP. */
+data class RunArtifact(
+    val id: Long,
+    val name: String,
+    val size: Long,
+    val expired: Boolean
+)
+
 /** Text file fetched for the editor (web: getFile()). */
 data class FileContent(
     val text: String,

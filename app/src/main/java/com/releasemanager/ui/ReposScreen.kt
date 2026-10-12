@@ -107,6 +107,10 @@ class ReposScreen(private val ctx: AppContext) {
                     onClick = { confirmVisibility(repo) }
                 ),
                 Dialogs.SheetItem(
+                    "Rename Repository", R.drawable.ic_pencil,
+                    onClick = { openRenameRepoDialog(repo) }
+                ),
+                Dialogs.SheetItem(
                     "Delete Repository", R.drawable.ic_trash,
                     danger = true, separatorBefore = true,
                     onClick = { openDeleteRepoDialog(repo) }
@@ -191,6 +195,37 @@ class ReposScreen(private val ctx: AppContext) {
             }
             ctx.toast.success("Set to ${if (toPrivate) "Private" else "Public"}")
             render()
+        }
+    }
+
+    // ── Rename repository ────────────────────────────────────────────────────
+
+    private fun openRenameRepoDialog(repo: RepoRef) {
+        val shortName = repo.fullName.repoShortName()
+        Dialogs.prompt(
+            ctx.activity, title = "Rename Repository", label = "New name",
+            initial = shortName, positive = "Rename"
+        ) { text ->
+            val newName = text.trim()
+            when {
+                newName == shortName -> Unit
+                !NAME_REGEX.matches(newName) ->
+                    ctx.toast.error("Use letters, numbers, hyphens, underscores, or dots only.")
+                else -> renameRepo(repo, newName)
+            }
+        }
+    }
+
+    private fun renameRepo(repo: RepoRef, newName: String) {
+        val api = ctx.api ?: return
+        ctx.toast.show("Renaming…")
+        ctx.launchSafe {
+            val renamed = api.renameRepo(repo.fullName, newName)
+            state.repos = state.repos.map { if (it.fullName == repo.fullName) renamed else it }
+            // The repo may be the one opened earlier: keep pointing at it under its new name
+            if (state.currentRepo == repo.fullName) state.currentRepo = renamed.fullName
+            render()
+            ctx.toast.success("Renamed to ${renamed.fullName.repoShortName()}")
         }
     }
 

@@ -78,6 +78,7 @@ class FilesScreen(private val ctx: AppContext) {
         btnBranch.setOnClickListener { showBranchDropdown() }
         btnCommitStaged.setOnClickListener { openCommitStagedDialog() }
         root.findViewById<ImageButton>(R.id.btnReleases).setOnClickListener { ctx.releases.enter() }
+        root.findViewById<ImageButton>(R.id.btnActions).setOnClickListener { ctx.actions.enter() }
         root.findViewById<ImageButton>(R.id.btnSelectMode).setOnClickListener {
             if (state.selectMode) {
                 exitSelectMode()

@@ -110,6 +110,7 @@ class MainActivity : AppCompatActivity() {
         roots[Screen.UPLOAD] = findViewById(R.id.screenUpload)
         roots[Screen.RELEASES] = findViewById(R.id.screenReleases)
         roots[Screen.RELEASE_NEW] = findViewById(R.id.screenReleaseNew)
+        roots[Screen.ACTIONS] = findViewById(R.id.screenActions)
 
         ctx.connect = ConnectScreen(ctx)
         ctx.repos = ReposScreen(ctx)
@@ -118,6 +119,7 @@ class MainActivity : AppCompatActivity() {
         ctx.upload = UploadScreen(ctx)
         ctx.releases = ReleasesScreen(ctx)
         ctx.releaseNew = ReleaseNewScreen(ctx)
+        ctx.actions = ActionsScreen(ctx)
 
         showScreen(Screen.CONNECT)
 
@@ -155,6 +157,7 @@ class MainActivity : AppCompatActivity() {
             Screen.UPLOAD -> showScreen(Screen.FILES)
             Screen.RELEASES -> showScreen(Screen.FILES)
             Screen.RELEASE_NEW -> showScreen(Screen.RELEASES)
+            Screen.ACTIONS -> showScreen(Screen.FILES)
         }
     }
 }

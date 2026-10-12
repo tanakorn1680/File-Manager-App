@@ -34,6 +34,15 @@
             android:src="@drawable/ic_plus" />
 
         <ImageButton
+            android:id="@+id/btnSortRepos"
+            style="@style/App.IconButton"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:layout_marginStart="4dp"
+            android:contentDescription="Sort"
+            android:src="@drawable/ic_sort" />
+
+        <ImageButton
             android:id="@+id/btnRefreshRepos"
             style="@style/App.IconButton"
             android:layout_width="40dp"

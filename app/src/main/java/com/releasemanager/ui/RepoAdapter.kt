@@ -8,6 +8,8 @@ import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 import com.releasemanager.R
 import com.releasemanager.data.RepoRef
+import com.releasemanager.util.formatSize
+import com.releasemanager.util.formatTimeAgo
 
 /** Web: renderRepos() — one `.repo-item` per repository. */
 class RepoAdapter(
@@ -28,6 +30,7 @@ class RepoAdapter(
         val textName: TextView = view.findViewById(R.id.textRepoName)
         val textDesc: TextView = view.findViewById(R.id.textRepoDesc)
         val textBadge: TextView = view.findViewById(R.id.textBadge)
+        val textMeta: TextView = view.findViewById(R.id.textRepoMeta)
         val btnEdit: ImageButton = view.findViewById(R.id.btnRepoEdit)
         val btnMore: ImageButton = view.findViewById(R.id.btnRepoMore)
     }
@@ -48,6 +51,9 @@ class RepoAdapter(
             holder.textDesc.text = repo.description
             holder.textDesc.visibility = View.VISIBLE
         }
+
+        holder.textMeta.text = listOf(formatSize(repo.sizeKb * 1024), formatTimeAgo(repo.updatedAt))
+            .filter { it.isNotEmpty() }.joinToString(" · ")
 
         if (repo.private) {
             holder.textBadge.text = "Private"

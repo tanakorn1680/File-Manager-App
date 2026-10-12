@@ -504,7 +504,7 @@ class UploadScreen(private val ctx: AppContext) {
         const val READ_CHUNK_CHARS = 24L * 1024 * 1024
 
         /** One file is read whole into memory, base64-encoded and sent in a JSON body. */
-        const val MAX_FILE_BYTES = 25L * 1024 * 1024
+        const val MAX_FILE_BYTES = 50L * 1024 * 1024
 
         const val AFTER_UPLOAD_DELAY_MS = 1200L
     }

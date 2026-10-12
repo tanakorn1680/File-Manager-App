@@ -17,6 +17,8 @@ import com.google.android.material.button.MaterialButton
 import com.releasemanager.R
 import com.releasemanager.data.EditMode
 import com.releasemanager.data.RepoRef
+import com.releasemanager.data.RepoSortKey
+import com.releasemanager.data.sortedForDisplay
 import kotlinx.coroutines.Job
 
 /** Web: #screen-repos — repo list with search, create, delete, visibility and the edit-mode sheet. */
@@ -41,6 +43,7 @@ class ReposScreen(private val ctx: AppContext) {
         list.adapter = adapter
 
         root.findViewById<ImageButton>(R.id.btnCreateRepo).setOnClickListener { openCreateRepoDialog() }
+        root.findViewById<ImageButton>(R.id.btnSortRepos).setOnClickListener { openSortSheet() }
         root.findViewById<ImageButton>(R.id.btnRefreshRepos).setOnClickListener { load() }
         root.findViewById<ImageButton>(R.id.btnDisconnect).setOnClickListener { confirmDisconnect() }
 
@@ -86,9 +89,38 @@ class ReposScreen(private val ctx: AppContext) {
         val filtered = state.repos.filter {
             it.fullName.lowercase().contains(q) || (it.description ?: "").lowercase().contains(q)
         }
-        adapter.submitList(filtered)
+        adapter.submitList(filtered.sortedForDisplay(state.repoSortKey, state.repoSortAsc))
         if (filtered.isEmpty()) stateView.showEmpty("No repositories found.") else stateView.hide()
     }
+
+    // ── Sort ─────────────────────────────────────────────────────────────────
+
+    private fun openSortSheet() {
+        val items = RepoSortKey.values().map { key ->
+            val selected = key == state.repoSortKey
+            Dialogs.SheetItem(
+                (if (selected) "✓ " else "") + key.label, R.drawable.ic_sort,
+                onClick = {
+                    state.repoSortKey = key
+                    render()
+                }
+            )
+        }.toMutableList()
+        val order = if (state.repoSortAsc) "Low → High (ascending)" else "High → Low (descending)"
+        items.add(
+            Dialogs.SheetItem(
+                "Order: $order", R.drawable.ic_refresh,
+                sub = "Tap to reverse",
+                separatorBefore = true,
+                onClick = {
+                    state.repoSortAsc = !state.repoSortAsc
+                    render()
+                }
+            )
+        )
+        Dialogs.sheet(ctx.activity, "Sort repositories", items)
+    }
+
 
     private fun openRepo(repo: RepoRef) {
         ctx.files.openRepo(repo.fullName, repo.defaultBranch)

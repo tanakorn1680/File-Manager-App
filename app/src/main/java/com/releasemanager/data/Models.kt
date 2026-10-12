@@ -87,7 +87,10 @@ data class DeleteTarget(
 data class UploadItem(
     val path: String,
     val name: String,
-    val content: String
+    val content: String,
+    /** Streamed items (big files): raw byte size, and a factory that opens the source again on every call. */
+    val streamSize: Long = -1,
+    val open: (() -> java.io.InputStream)? = null
 )
 
 /**
@@ -113,4 +116,9 @@ class EditingFile(
 enum class EditMode { QUICK, STAGE }
 
 /** Thrown for any non-2xx GitHub API response, carrying the message GitHub sent back. */
-class GitHubApiException(message: String, val httpStatus: Int) : Exception(message)
+class GitHubApiException(
+    message: String,
+    val httpStatus: Int,
+    /** Seconds GitHub asked us to wait (rate limit); null for every other error. */
+    val retryAfterSec: Long? = null
+) : Exception(message)

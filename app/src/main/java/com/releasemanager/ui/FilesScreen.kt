@@ -765,6 +765,9 @@ class FilesScreen(private val ctx: AppContext) {
 
         committing = true
         ctx.toast.show("Committing…")
+        api.onRateLimitWait = { sec ->
+            if (sec > 0 && sec % 10 == 0) ctx.toast.show("GitHub rate limit — waiting ${sec}s, will continue…")
+        }
         ctx.launchSafe(onError = { ctx.toast.error(it.userMessage()) }) {
             try {
                 if (toUpsert.isNotEmpty()) {
@@ -781,6 +784,7 @@ class FilesScreen(private val ctx: AppContext) {
                 ctx.toast.success("Committed ${all.size} change${if (all.size > 1) "s" else ""}")
                 loadFiles()
             } finally {
+                api.onRateLimitWait = null
                 committing = false
                 updateStagedBadge()
             }

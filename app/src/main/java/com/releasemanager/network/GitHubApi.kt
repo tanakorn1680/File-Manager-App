@@ -19,6 +19,7 @@ import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
+import okhttp3.Response
 import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okio.BufferedSink
@@ -95,12 +96,54 @@ class GitHubApi(private val token: String) {
      * JSON object or a JSON array (e.g. the Contents API: array for a folder, object
      * for a file) or empty (204). Returns JSONObject, JSONArray or null.
      */
-    private suspend fun call(request: Request): Any? = withContext(Dispatchers.IO) {
+    private suspend fun call(request: Request): Any? {
+        var waits = 0
+        while (true) {
+            try {
+                return callOnce(request)
+            } catch (e: GitHubApiException) {
+                val wait = e.retryAfterSec
+                if (wait == null || waits >= MAX_RATE_LIMIT_WAITS) throw e
+                waits++
+                waitOutRateLimit(wait)
+            }
+        }
+    }
+
+    private suspend fun callOnce(request: Request): Any? = withContext(Dispatchers.IO) {
         client.newCall(request).execute().use { resp ->
             val bodyStr = resp.body?.string().orEmpty()
-            if (!resp.isSuccessful) throw GitHubApiException(errorMessage(bodyStr, resp.code), resp.code)
+            if (!resp.isSuccessful) {
+                throw GitHubApiException(errorMessage(bodyStr, resp.code), resp.code, rateLimitWaitSec(resp, bodyStr))
+            }
             if (bodyStr.isBlank()) null else JSONTokener(bodyStr).nextValue()
         }
+    }
+
+    /** Seconds to wait if this failed response is a GitHub rate limit (primary or secondary), else null. */
+    private fun rateLimitWaitSec(resp: Response, body: String): Long? {
+        if (resp.code != 403 && resp.code != 429) return null
+        resp.header("Retry-After")?.toLongOrNull()?.let { return it + 1 }
+        val reset = resp.header("x-ratelimit-reset")?.toLongOrNull()
+        if (resp.header("x-ratelimit-remaining") == "0" && reset != null) {
+            return (reset - System.currentTimeMillis() / 1000).coerceAtLeast(1) + 1
+        }
+        // Secondary limits without a header: GitHub asks for at least a minute
+        if (resp.code == 429 || body.contains("rate limit", ignoreCase = true)) return 60L
+        return null
+    }
+
+    /** Called on the main thread once a second while waiting out a rate limit (0 = done waiting). */
+    @Volatile var onRateLimitWait: ((secondsLeft: Int) -> Unit)? = null
+
+    private suspend fun waitOutRateLimit(seconds: Long) {
+        var left = seconds.coerceIn(1L, MAX_RATE_LIMIT_WAIT_SEC).toInt()
+        while (left > 0) {
+            onRateLimitWait?.let { cb -> withContext(Dispatchers.Main) { cb(left) } }
+            delay(1000)
+            left--
+        }
+        onRateLimitWait?.let { cb -> withContext(Dispatchers.Main) { cb(0) } }
     }
 
     private fun errorMessage(bodyStr: String, code: Int): String =
@@ -338,9 +381,12 @@ class GitHubApi(private val token: String) {
         val binaryItems = ArrayList<UploadItem>()
         // Decoding and UTF-8 checking up to a few MB is CPU work: keep it off the main thread
         withContext(Dispatchers.Default) {
+            var inlineBytes = 0L
             for (f in items) {
+                if (f.open != null) { binaryItems.add(f); continue } // streamed from its source, never held in memory
                 val bytes = Base64.decode(f.content, Base64.DEFAULT)
-                if (isSafeUtf8Text(bytes)) {
+                if (isSafeUtf8Text(bytes) && inlineBytes + bytes.size <= INLINE_TEXT_BUDGET) {
+                    inlineBytes += bytes.size
                     treeItems.put(
                         JSONObject().put("path", f.path).put("mode", "100644").put("type", "blob")
                             .put("content", String(bytes, Charsets.UTF_8))
@@ -350,12 +396,17 @@ class GitHubApi(private val token: String) {
                 }
             }
         }
-        // Sequential on purpose: keeps a binary-heavy batch under GitHub's
-        // per-minute content-creation limits.
+        // Binary files (and text beyond the inline budget) go up as blobs, one at a time.
+        // A GitHub rate limit just pauses here and resumes — see call().
         for (f in binaryItems) {
-            val blobPayload = JSONObject().put("content", f.content).put("encoding", "base64")
+            val open = f.open
+            val body = if (open != null) {
+                Base64JsonBody(open, f.streamSize)
+            } else {
+                jsonBody(JSONObject().put("content", f.content).put("encoding", "base64"))
+            }
             val blob = call(
-                authedRequest("https://api.github.com/repos/$repo/git/blobs").post(jsonBody(blobPayload)).build()
+                authedRequest("https://api.github.com/repos/$repo/git/blobs").post(body).build()
             ) as JSONObject
             treeItems.put(treeEntry(f.path, blob.getString("sha")))
         }
@@ -621,6 +672,13 @@ class GitHubApi(private val token: String) {
 
     private companion object {
         const val MAX_REF_RETRIES = 4
+
+        /** Rate-limit waits per request before giving up (each up to MAX_RATE_LIMIT_WAIT_SEC). */
+        const val MAX_RATE_LIMIT_WAITS = 40
+        const val MAX_RATE_LIMIT_WAIT_SEC = 3_700L
+
+        /** Text inlined into one tree-create request; the rest of a big chunk goes up as blobs. */
+        const val INLINE_TEXT_BUDGET = 3L * 1024 * 1024
     }
 }
 
@@ -650,5 +708,44 @@ private class ProgressRequestBody(
         val bufferedCountingSink = countingSink.buffer()
         delegate.writeTo(bufferedCountingSink)
         bufferedCountingSink.flush()
+    }
+}
+
+/**
+ * Blob-create request body `{"encoding":"base64","content":"<base64>"}` produced on the fly from a stream,
+ * so a file of any size is sent in small pieces and never held in memory. The length is computed up front
+ * (base64 = 4 bytes per 3), and [open] is called again on every attempt, so rate-limit retries just re-read the source.
+ */
+private class Base64JsonBody(
+    private val open: () -> java.io.InputStream,
+    private val rawSize: Long
+) : RequestBody() {
+    private val prefix = "{\"encoding\":\"base64\",\"content\":\"".toByteArray()
+    private val suffix = "\"}".toByteArray()
+
+    override fun contentType() = "application/json".toMediaTypeOrNull()
+
+    override fun contentLength(): Long =
+        if (rawSize < 0) -1 else prefix.size + 4 * ((rawSize + 2) / 3) + suffix.size
+
+    override fun isOneShot() = false
+
+    override fun writeTo(sink: BufferedSink) {
+        sink.write(prefix)
+        open().use { input ->
+            val buf = ByteArray(3 * 16 * 1024) // multiple of 3: only the last piece carries '=' padding
+            while (true) {
+                var n = 0
+                while (n < buf.size) {
+                    val r = input.read(buf, n, buf.size - n)
+                    if (r < 0) break
+                    n += r
+                }
+                if (n == 0) break
+                sink.write(Base64.encode(buf, 0, n, Base64.NO_WRAP))
+                if (n < buf.size) break
+            }
+        }
+        sink.write(suffix)
     }
 }

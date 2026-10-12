@@ -100,7 +100,9 @@ data class StagedFile(
     val sha: String?,
     val type: String,
     val action: String,
-    val content: String?
+    val content: String?,
+    /** Staged upload kept on disk (not in memory) so Stage Mode has no size cap of its own; [content] is null then. */
+    val diskPath: String? = null
 )
 
 /** File currently open in the editor (web: state.editingFile). */
@@ -109,6 +111,9 @@ class EditingFile(
     var sha: String?,
     val name: String
 )
+
+/** Cache sub-folder holding Stage Mode uploads (kept on disk, not in memory) until Commit All. */
+const val STAGED_DIR = "staged-uploads"
 
 enum class EditMode { QUICK, STAGE }
 

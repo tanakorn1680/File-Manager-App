@@ -2,7 +2,6 @@ package com.releasemanager.ui
 
 import android.net.Uri
 import android.provider.OpenableColumns
-import android.util.Base64
 import android.view.LayoutInflater
 import android.view.View
 import android.widget.ImageButton
@@ -13,8 +12,8 @@ import android.widget.TextView
 import com.google.android.material.button.MaterialButton
 import com.releasemanager.R
 import com.releasemanager.data.EditMode
+import com.releasemanager.data.STAGED_DIR
 import com.releasemanager.data.StagedFile
-import com.releasemanager.data.UploadItem
 import com.releasemanager.network.GitPhase
 import com.releasemanager.util.formatSize
 import kotlinx.coroutines.CancellationException
@@ -268,7 +267,7 @@ class UploadScreen(private val ctx: AppContext) {
         }
     }
 
-    /** Stage Mode: files are read (in chunks) into memory and queued for "Commit all". */
+    /** Stage Mode: files are copied to app storage (not memory) and queued for "Commit all". */
     private suspend fun doFilesStage() {
         val dir = state.currentPath
         val files = picked
@@ -282,21 +281,13 @@ class UploadScreen(private val ctx: AppContext) {
         var doneUpTo = 0 // rows before this are staged
         try {
             while (i < total) {
-                val chunk = mutableListOf<Pair<Int, UploadItem>>() // (row index, item)
-                var chunkChars = 0L
-                while (i < total && chunk.size < READ_CHUNK_FILES && chunkChars < READ_CHUNK_CHARS) {
-                    val f = files[i]
-                    setStatus(i, if (summaryMode) "Reading ${i + 1}/$total…" else "Reading…", Kind.WORKING)
-                    val content = readBase64(f)
-                    val targetPath = if (dir.isNotEmpty()) "$dir/${f.name}" else f.name
-                    chunk.add(i to UploadItem(targetPath, f.name, content))
-                    chunkChars += content.length
-                    i++
-                }
-                for ((index, item) in chunk) {
-                    state.stagedFiles[item.path] = StagedFile(item.path, item.name, null, "file", "upload", item.content)
-                    if (!summaryMode) setStatus(index, "Staged", Kind.DONE)
-                }
+                val f = files[i]
+                setStatus(i, if (summaryMode) "Staging ${i + 1}/$total…" else "Staging…", Kind.WORKING)
+                val targetPath = if (dir.isNotEmpty()) "$dir/${f.name}" else f.name
+                val disk = withContext(Dispatchers.IO) { stageToDisk { openPicked(f) } }
+                state.stagedFiles[targetPath] = StagedFile(targetPath, f.name, null, "file", "upload", null, disk.absolutePath)
+                if (!summaryMode) setStatus(i, "Staged", Kind.DONE)
+                i++
                 if (summaryMode) setStatus(0, "$i/$total staged", Kind.WORKING)
                 setProgress(progress1, i.toDouble() / total)
                 doneUpTo = i
@@ -356,22 +347,11 @@ class UploadScreen(private val ctx: AppContext) {
 
                 val total = targets.size
                 if (stage) {
-                    var read = 0
-                    while (read < total) {
-                        val chunk = mutableListOf<UploadItem>()
-                        var chunkChars = 0L
-                        while (read < total && chunk.size < READ_CHUNK_FILES && chunkChars < READ_CHUNK_CHARS) {
-                            val t = targets[read]
-                            val content = withContext(Dispatchers.IO) { readZipEntry(zip, t) }
-                            chunk.add(UploadItem(t.path, t.name, content))
-                            chunkChars += content.length
-                            read++
-                            setProgress(progress1, read.toDouble() / total)
-                        }
-                        chunk.forEach {
-                            state.stagedFiles[it.path] = StagedFile(it.path, it.name, null, "file", "upload", it.content)
-                        }
-                        setStatus(0, "$read/$total staged", Kind.WORKING)
+                    for ((read, t) in targets.withIndex()) {
+                        val disk = withContext(Dispatchers.IO) { stageToDisk { zip.getInputStream(t.entry) } }
+                        state.stagedFiles[t.path] = StagedFile(t.path, t.name, null, "file", "upload", null, disk.absolutePath)
+                        setProgress(progress1, (read + 1).toDouble() / total)
+                        setStatus(0, "${read + 1}/$total staged", Kind.WORKING)
                     }
                     setProgress(progress1, 1.0)
                     setStatus(0, "$total files staged", Kind.DONE)
@@ -452,25 +432,18 @@ class UploadScreen(private val ctx: AppContext) {
 
     // ── Reading ──────────────────────────────────────────────────────────────
 
-    private suspend fun readBase64(f: Picked): String = withContext(Dispatchers.IO) {
+    /** Copies [open]'s stream into the app cache (sequential disk I/O, nothing held in memory) and returns that file. */
+    private fun stageToDisk(open: () -> java.io.InputStream): File {
+        val dir = File(act.cacheDir, STAGED_DIR).apply { mkdirs() }
+        val out = File(dir, "s${System.nanoTime()}")
         try {
-            val bytes = act.contentResolver.openInputStream(f.uri)?.use { it.readBytes() }
-                ?: throw IOException("Could not read \"${f.name}\"")
-            if (bytes.size > maxFileBytes()) throw IOException(tooLargeMessage(f.name, bytes.size.toLong()))
-            Base64.encodeToString(bytes, Base64.NO_WRAP)
-        } catch (e: OutOfMemoryError) {
-            throw IOException("Not enough memory to read \"${f.name}\"")
+            open().use { input -> out.outputStream().use { input.copyTo(it, 64 * 1024) } }
+        } catch (e: Throwable) {
+            out.delete()
+            throw e
         }
+        return out
     }
-
-    private fun readZipEntry(zip: ZipFile, target: ZipTarget): String =
-        try {
-            val bytes = zip.getInputStream(target.entry).use { it.readBytes() }
-            if (bytes.size > maxFileBytes()) throw IOException(tooLargeMessage(target.name, bytes.size.toLong()))
-            Base64.encodeToString(bytes, Base64.NO_WRAP)
-        } catch (e: OutOfMemoryError) {
-            throw IOException("Not enough memory to read \"${target.name}\"")
-        }
 
     private fun copyToCache(pick: Picked): File {
         val out = File(act.cacheDir, "upload_zip_${System.currentTimeMillis()}.zip")
@@ -485,17 +458,11 @@ class UploadScreen(private val ctx: AppContext) {
         return out
     }
 
-    private fun maxFileBytes() =
-        if (state.editMode == EditMode.STAGE) MAX_FILE_BYTES else GITHUB_MAX_FILE_BYTES
+    private fun maxFileBytes() = GITHUB_MAX_FILE_BYTES
 
     private fun tooLargeMessage(name: String, size: Long) =
-        if (state.editMode == EditMode.STAGE) {
-            "\"$name\" is ${formatSize(size)} — over the ${formatSize(MAX_FILE_BYTES)} limit for Stage Mode " +
-                "(staged files are kept in memory). Use Quick Edit for big files."
-        } else {
-            "\"$name\" is ${formatSize(size)} — GitHub does not accept files over " +
-                "${formatSize(GITHUB_MAX_FILE_BYTES)} in a repository. Attach large files to a release instead."
-        }
+        "\"$name\" is ${formatSize(size)} — GitHub does not accept files over " +
+            "${formatSize(GITHUB_MAX_FILE_BYTES)} in a repository. Attach large files to a release instead."
 
     private fun openPicked(f: Picked): java.io.InputStream =
         act.contentResolver.openInputStream(f.uri) ?: throw IOException("Could not read \"${f.name}\"")
@@ -530,15 +497,6 @@ class UploadScreen(private val ctx: AppContext) {
     private companion object {
         /** Web: UPLOAD_LIST_ROW_CAP. */
         const val UPLOAD_LIST_ROW_CAP = 300
-
-        /** Web: READ_CHUNK_SIZE — files read before they are committed / staged. */
-        const val READ_CHUNK_FILES = 200
-
-        /** Extra bound for the app: base64 characters held in memory per chunk (a phone has far less RAM than a browser tab). */
-        const val READ_CHUNK_CHARS = 24L * 1024 * 1024
-
-        /** Stage Mode keeps whole files in memory until Commit All, so it stays bounded. */
-        const val MAX_FILE_BYTES = 50L * 1024 * 1024
 
         /** GitHub itself refuses files over 100 MB in a repository, whatever tool is used. */
         const val GITHUB_MAX_FILE_BYTES = 100L * 1024 * 1024

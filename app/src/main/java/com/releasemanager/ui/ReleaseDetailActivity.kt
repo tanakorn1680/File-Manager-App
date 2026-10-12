@@ -125,6 +125,11 @@ class ReleaseDetailActivity : AppCompatActivity() {
 
     private fun startUpload(uri: Uri) {
         val fileName = queryFileName(uri) ?: "upload_${System.currentTimeMillis()}"
+        val size = queryFileSize(uri)
+        if (size >= RELEASE_ASSET_LIMIT_BYTES) {
+            appToast.error("\"$fileName\" is ${formatSize(size)} — GitHub accepts release files under 2 GiB.", 8000)
+            return
+        }
         val mimeType = contentResolver.getType(uri)
             ?: MimeTypeMap.getSingleton().getMimeTypeFromExtension(fileName.substringAfterLast('.', ""))
             ?: "application/octet-stream"
@@ -137,23 +142,31 @@ class ReleaseDetailActivity : AppCompatActivity() {
         uploadJob = lifecycleScope.launch {
             var tempFile: File? = null
             try {
-                // GitHub's upload endpoint (and OkHttp's streaming RequestBody)
-                // needs a real file with a known length — a content:// Uri's
-                // stream doesn't reliably expose that. So the picked file is
-                // first copied into this app's own cache dir, then streamed
-                // from there. This copy itself is sequential disk I/O (not
-                // held in memory at once), so it stays viable for large
-                // files too — the ~1GB case this app exists for.
-                textUploadLabel.text = "Copying $fileName into app storage…"
-                tempFile = withContext(Dispatchers.IO) { copyUriToCacheFile(uri, fileName) }
-
-                textUploadLabel.text = "Uploading $fileName…"
-                val asset = api.uploadAsset(repo, releaseId, tempFile, mimeType) { sent, total ->
+                // GitHub's upload endpoint needs the exact length up front. When the file provider reports it,
+                // the bytes are streamed straight from the picked file (nothing copied, nothing held in memory);
+                // only when it does not is the file copied into the app cache first.
+                val onProgress: (Long, Long) -> Unit = { sent, total ->
                     runOnUiThread {
                         val pct = if (total > 0) ((sent * 100) / total).toInt() else 0
                         progressUpload.progress = pct
                         textUploadLabel.text = "Uploading $fileName… ${formatSize(sent)} / ${formatSize(total)}"
                     }
+                }
+                val asset = if (size > 0) {
+                    // Size is known: stream straight from the picked file, no copy into app storage
+                    textUploadLabel.text = "Uploading $fileName…"
+                    api.uploadAssetStream(
+                        repo, releaseId, fileName, mimeType, size,
+                        { contentResolver.openInputStream(uri) ?: throw java.io.IOException("Could not open selected file") },
+                        onProgress
+                    )
+                } else {
+                    // The provider did not report a size (GitHub needs the exact length): copy first, then upload
+                    textUploadLabel.text = "Copying $fileName into app storage…"
+                    val copy = withContext(Dispatchers.IO) { copyUriToCacheFile(uri, fileName) }
+                    tempFile = copy
+                    textUploadLabel.text = "Uploading $fileName…"
+                    api.uploadAsset(repo, releaseId, copy, mimeType, onProgress, fileName)
                 }
 
                 assetAdapter.addItem(asset)
@@ -190,6 +203,18 @@ class ReleaseDetailActivity : AppCompatActivity() {
             }
         } ?: throw java.io.IOException("Could not open selected file")
         return outFile
+    }
+
+    /** Exact size in bytes as the file provider reports it, or -1 when it does not. */
+    private fun queryFileSize(uri: Uri): Long {
+        var size = -1L
+        contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+            val idx = cursor.getColumnIndex(OpenableColumns.SIZE)
+            if (idx >= 0 && cursor.moveToFirst() && !cursor.isNull(idx)) {
+                size = cursor.getLong(idx)
+            }
+        }
+        return size
     }
 
     private fun queryFileName(uri: Uri): String? {
@@ -266,5 +291,8 @@ class ReleaseDetailActivity : AppCompatActivity() {
         const val EXTRA_BODY = "extra_body"
         const val EXTRA_DRAFT = "extra_draft"
         const val EXTRA_PRERELEASE = "extra_prerelease"
+
+        /** GitHub rejects release assets of 2 GiB or more. */
+        const val RELEASE_ASSET_LIMIT_BYTES = 2L * 1024 * 1024 * 1024
     }
 }

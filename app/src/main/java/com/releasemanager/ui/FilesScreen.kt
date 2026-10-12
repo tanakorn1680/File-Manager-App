@@ -31,6 +31,7 @@ import com.releasemanager.data.EditMode
 import com.releasemanager.data.EditingFile
 import com.releasemanager.data.FileEntry
 import com.releasemanager.data.GitHubApiException
+import com.releasemanager.data.STAGED_DIR
 import com.releasemanager.data.StagedFile
 import com.releasemanager.data.UploadItem
 import kotlinx.coroutines.Dispatchers
@@ -100,7 +101,10 @@ class FilesScreen(private val ctx: AppContext) {
     /** Web: openRepo(name, branch). */
     fun openRepo(name: String, branch: String) {
         // Switching to a different repo drops the staged queue of the old one
-        if (state.currentRepo != name) state.stagedFiles.clear()
+        if (state.currentRepo != name) {
+            state.stagedFiles.clear()
+            clearStagedDisk()
+        }
         state.currentRepo = name
         state.currentBranch = branch.ifEmpty { "main" }
         state.currentPath = ""
@@ -147,6 +151,11 @@ class FilesScreen(private val ctx: AppContext) {
             renderFiles()
             onLoaded?.invoke()
         }
+    }
+
+    /** Deletes the copies Stage Mode kept on disk for uploads (called when the queue is committed or dropped). */
+    private fun clearStagedDisk() {
+        java.io.File(ctx.activity.cacheDir, STAGED_DIR).deleteRecursively()
     }
 
     private fun hasStagedUnder(path: String) = state.stagedFiles.keys.any { it.startsWith("$path/") }
@@ -300,6 +309,7 @@ class FilesScreen(private val ctx: AppContext) {
         if (state.stagedFiles.isNotEmpty()) {
             guardStagedBack {
                 state.stagedFiles.clear()
+                clearStagedDisk()
                 updateStagedBadge()
                 ctx.show(Screen.REPOS)
             }
@@ -778,7 +788,9 @@ class FilesScreen(private val ctx: AppContext) {
                     }
                     try {
                         for (sf in toUpsert) {
-                            session.addBytes(sf.path, Base64.decode(sf.content.orEmpty(), Base64.DEFAULT))
+                            val disk = sf.diskPath
+                            if (disk != null) session.addFile(sf.path) { java.io.File(disk).inputStream() }
+                            else session.addBytes(sf.path, Base64.decode(sf.content.orEmpty(), Base64.DEFAULT))
                         }
                         session.commitAndPush(message)
                     } finally {
@@ -786,6 +798,7 @@ class FilesScreen(private val ctx: AppContext) {
                     }
                     // Already on GitHub: if the deletions below fail, a retry must not re-send these
                     toUpsert.forEach { state.stagedFiles.remove(it.path) }
+                    clearStagedDisk()
                 }
                 if (toDelete.isNotEmpty()) {
                     val targets = toDelete.map { DeleteTarget(it.path, it.type == "dir") }

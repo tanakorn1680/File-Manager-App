@@ -76,8 +76,12 @@ class EditorScreen(private val ctx: AppContext) {
             val queued = state.stagedFiles[file.path]
             if (queued != null && queued.action != "delete") {
                 val text = try {
-                    String(Base64.decode(queued.content.orEmpty(), Base64.DEFAULT), Charsets.UTF_8)
+                    val disk = queued.diskPath
+                    if (disk != null) java.io.File(disk).readText(Charsets.UTF_8)
+                    else String(Base64.decode(queued.content.orEmpty(), Base64.DEFAULT), Charsets.UTF_8)
                 } catch (e: IllegalArgumentException) {
+                    null
+                } catch (e: java.io.IOException) {
                     null
                 }
                 if (text != null) {

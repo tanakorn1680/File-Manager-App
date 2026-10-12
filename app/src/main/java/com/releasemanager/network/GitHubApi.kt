@@ -15,6 +15,7 @@ import com.releasemanager.data.WorkflowRun
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -24,10 +25,12 @@ import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okio.BufferedSink
 import okio.buffer
+import okio.source
 import org.json.JSONArray
 import org.json.JSONObject
 import org.json.JSONTokener
 import java.io.File
+import java.io.InputStream
 import java.io.OutputStream
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
@@ -526,18 +529,45 @@ class GitHubApi(private val token: String) {
         releaseId: Long,
         file: File,
         mimeType: String,
-        onProgress: (bytesSent: Long, totalBytes: Long) -> Unit
-    ): ReleaseAsset = withContext(Dispatchers.IO) {
+        onProgress: (bytesSent: Long, totalBytes: Long) -> Unit,
+        name: String = file.name
+    ): ReleaseAsset {
         val totalBytes = file.length()
         val fileBody = file.asRequestBody(mimeType.toMediaTypeOrNull())
-        val progressBody = ProgressRequestBody(fileBody, totalBytes, onProgress)
+        return postAsset(repo, releaseId, name, mimeType, ProgressRequestBody(fileBody, totalBytes, onProgress))
+    }
 
-        val encodedName = java.net.URLEncoder.encode(file.name, "UTF-8").replace("+", "%20")
+    /**
+     * Same upload, but streamed straight from [open] (e.g. a content:// Uri) — no copy into app storage first,
+     * so no free space is needed beyond the file itself. [size] must be the exact byte length (GitHub needs
+     * Content-Length); [open] may be called again if OkHttp retries the connection.
+     */
+    suspend fun uploadAssetStream(
+        repo: String,
+        releaseId: Long,
+        name: String,
+        mimeType: String,
+        size: Long,
+        open: () -> InputStream,
+        onProgress: (bytesSent: Long, totalBytes: Long) -> Unit
+    ): ReleaseAsset {
+        val body = StreamRequestBody(mimeType.toMediaTypeOrNull(), size, open)
+        return postAsset(repo, releaseId, name, mimeType, ProgressRequestBody(body, size, onProgress))
+    }
+
+    private suspend fun postAsset(
+        repo: String,
+        releaseId: Long,
+        name: String,
+        mimeType: String,
+        body: RequestBody
+    ): ReleaseAsset = withContext(Dispatchers.IO) {
+        val encodedName = java.net.URLEncoder.encode(name, "UTF-8").replace("+", "%20")
         val url = "https://uploads.github.com/repos/$repo/releases/$releaseId/assets?name=$encodedName"
 
         val req = authedRequest(url)
             .addHeader("Content-Type", mimeType)
-            .post(progressBody)
+            .post(body)
             .build()
 
         val json = execute(req) ?: throw GitHubApiException("Empty response from GitHub", 0)
@@ -601,6 +631,20 @@ class GitHubApi(private val token: String) {
         const val MAX_RATE_LIMIT_WAITS = 40
         const val MAX_RATE_LIMIT_WAIT_SEC = 3_700L
 
+    }
+}
+
+/** Request body with a known length whose bytes come from an InputStream, copied through in small pieces. */
+private class StreamRequestBody(
+    private val type: MediaType?,
+    private val length: Long,
+    private val open: () -> InputStream
+) : RequestBody() {
+    override fun contentType() = type
+    override fun contentLength() = length
+
+    override fun writeTo(sink: BufferedSink) {
+        open().source().use { sink.writeAll(it) }
     }
 }
 

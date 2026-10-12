@@ -175,7 +175,7 @@ class UploadScreen(private val ctx: AppContext) {
         // Whole files are read into memory to be committed, so refuse the ones that cannot fit up front
         // instead of failing half way through
         if (mode == Mode.FILES) {
-            val tooBig = picked.firstOrNull { it.size > MAX_FILE_BYTES }
+            val tooBig = picked.firstOrNull { it.size > maxFileBytes() }
             if (tooBig != null) {
                 ctx.toast.error(tooLargeMessage(tooBig.name, tooBig.size), 8000)
                 return
@@ -189,10 +189,15 @@ class UploadScreen(private val ctx: AppContext) {
         progress2.progress = 0
         progressGroup.visibility = View.VISIBLE
 
+        ctx.api?.onRateLimitWait = { sec ->
+            if (sec > 0) setStatus(0, "GitHub rate limit — waiting ${sec}s, will continue…", Kind.WORKING)
+            else setStatus(0, "Uploading…", Kind.WORKING)
+        }
         ctx.launchSafe {
             try {
                 if (mode == Mode.ZIP) doZipUpload() else doFilesUpload()
             } finally {
+                ctx.api?.onRateLimitWait = null
                 uploading = false
                 btnDoUpload.isEnabled = true
             }
@@ -223,10 +228,18 @@ class UploadScreen(private val ctx: AppContext) {
                 while (i < total && chunk.size < READ_CHUNK_FILES && chunkChars < READ_CHUNK_CHARS) {
                     val f = files[i]
                     setStatus(i, if (summaryMode) "Reading ${i + 1}/$total…" else "Reading…", Kind.WORKING)
-                    val content = readBase64(f)
                     val targetPath = if (dir.isNotEmpty()) "$dir/${f.name}" else f.name
-                    chunk.add(i to UploadItem(targetPath, f.name, content))
-                    chunkChars += content.length
+                    val size = if (stage) f.size else sizeOf(f)
+                    if (!stage && size > STREAM_THRESHOLD_BYTES) {
+                        // Big file: streamed from the device while uploading, never read into memory
+                        if (size > GITHUB_MAX_FILE_BYTES) throw IOException(tooLargeMessage(f.name, size))
+                        chunk.add(i to UploadItem(targetPath, f.name, "", size, open = { openPicked(f) }))
+                        chunkChars += size / 3 * 4
+                    } else {
+                        val content = readBase64(f)
+                        chunk.add(i to UploadItem(targetPath, f.name, content))
+                        chunkChars += content.length
+                    }
                     i++
                 }
                 setProgress(progress1, i.toDouble() / total * 0.5)
@@ -312,7 +325,7 @@ class UploadScreen(private val ctx: AppContext) {
                     ctx.toast.error("ZIP contains no files")
                     return
                 }
-                val tooBig = targets.firstOrNull { it.entry.size > MAX_FILE_BYTES }
+                val tooBig = targets.firstOrNull { it.entry.size > maxFileBytes() }
                 if (tooBig != null) throw IOException(tooLargeMessage(tooBig.name, tooBig.entry.size))
 
                 val total = targets.size
@@ -328,9 +341,15 @@ class UploadScreen(private val ctx: AppContext) {
                     var chunkChars = 0L
                     while (read < total && chunk.size < READ_CHUNK_FILES && chunkChars < READ_CHUNK_CHARS) {
                         val t = targets[read]
-                        val content = withContext(Dispatchers.IO) { readZipEntry(zip, t) }
-                        chunk.add(UploadItem(t.path, t.name, content))
-                        chunkChars += content.length
+                        if (!stage && t.entry.size > STREAM_THRESHOLD_BYTES) {
+                            // Big entry: streamed out of the ZIP while uploading, never held in memory
+                            chunk.add(UploadItem(t.path, t.name, "", t.entry.size, open = { zip.getInputStream(t.entry) }))
+                            chunkChars += t.entry.size / 3 * 4
+                        } else {
+                            val content = withContext(Dispatchers.IO) { readZipEntry(zip, t) }
+                            chunk.add(UploadItem(t.path, t.name, content))
+                            chunkChars += content.length
+                        }
                         read++
                         setProgress(progress1, read.toDouble() / total)
                     }
@@ -433,7 +452,7 @@ class UploadScreen(private val ctx: AppContext) {
         try {
             val bytes = act.contentResolver.openInputStream(f.uri)?.use { it.readBytes() }
                 ?: throw IOException("Could not read \"${f.name}\"")
-            if (bytes.size > MAX_FILE_BYTES) throw IOException(tooLargeMessage(f.name, bytes.size.toLong()))
+            if (bytes.size > maxFileBytes()) throw IOException(tooLargeMessage(f.name, bytes.size.toLong()))
             Base64.encodeToString(bytes, Base64.NO_WRAP)
         } catch (e: OutOfMemoryError) {
             throw IOException("Not enough memory to read \"${f.name}\"")
@@ -443,7 +462,7 @@ class UploadScreen(private val ctx: AppContext) {
     private fun readZipEntry(zip: ZipFile, target: ZipTarget): String =
         try {
             val bytes = zip.getInputStream(target.entry).use { it.readBytes() }
-            if (bytes.size > MAX_FILE_BYTES) throw IOException(tooLargeMessage(target.name, bytes.size.toLong()))
+            if (bytes.size > maxFileBytes()) throw IOException(tooLargeMessage(target.name, bytes.size.toLong()))
             Base64.encodeToString(bytes, Base64.NO_WRAP)
         } catch (e: OutOfMemoryError) {
             throw IOException("Not enough memory to read \"${target.name}\"")
@@ -462,9 +481,35 @@ class UploadScreen(private val ctx: AppContext) {
         return out
     }
 
+    private fun maxFileBytes() =
+        if (state.editMode == EditMode.STAGE) MAX_FILE_BYTES else GITHUB_MAX_FILE_BYTES
+
     private fun tooLargeMessage(name: String, size: Long) =
-        "\"$name\" is ${formatSize(size)} — over the ${formatSize(MAX_FILE_BYTES)} limit for files committed here. " +
-            "Attach large files to a release instead."
+        if (state.editMode == EditMode.STAGE) {
+            "\"$name\" is ${formatSize(size)} — over the ${formatSize(MAX_FILE_BYTES)} limit for Stage Mode " +
+                "(staged files are kept in memory). Use Quick Edit for big files."
+        } else {
+            "\"$name\" is ${formatSize(size)} — GitHub does not accept files over " +
+                "${formatSize(GITHUB_MAX_FILE_BYTES)} in a repository. Attach large files to a release instead."
+        }
+
+    private fun openPicked(f: Picked): java.io.InputStream =
+        act.contentResolver.openInputStream(f.uri) ?: throw IOException("Could not read \"${f.name}\"")
+
+    /** The picker gives no size for some providers (-1): count the bytes once, streaming. */
+    private suspend fun sizeOf(f: Picked): Long =
+        if (f.size >= 0) f.size else withContext(Dispatchers.IO) {
+            openPicked(f).use { input ->
+                val buf = ByteArray(64 * 1024)
+                var total = 0L
+                while (true) {
+                    val r = input.read(buf)
+                    if (r < 0) break
+                    total += r
+                }
+                total
+            }
+        }
 
     // ── UI helpers ───────────────────────────────────────────────────────────
 
@@ -503,8 +548,14 @@ class UploadScreen(private val ctx: AppContext) {
         /** Extra bound for the app: base64 characters held in memory per chunk (a phone has far less RAM than a browser tab). */
         const val READ_CHUNK_CHARS = 24L * 1024 * 1024
 
-        /** One file is read whole into memory, base64-encoded and sent in a JSON body. */
+        /** Stage Mode keeps whole files in memory until Commit All, so it stays bounded. */
         const val MAX_FILE_BYTES = 50L * 1024 * 1024
+
+        /** GitHub itself refuses files over 100 MB in a repository (blobs API and git push alike). */
+        const val GITHUB_MAX_FILE_BYTES = 100L * 1024 * 1024
+
+        /** Quick Edit: files bigger than this are streamed from disk instead of being read into memory. */
+        const val STREAM_THRESHOLD_BYTES = 8L * 1024 * 1024
 
         const val AFTER_UPLOAD_DELAY_MS = 1200L
     }

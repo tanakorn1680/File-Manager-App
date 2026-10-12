@@ -46,6 +46,12 @@ android {
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            // JGit's jar carries signature files / duplicate metadata that make the APK merge fail
+            excludes += setOf(
+                "META-INF/*.SF", "META-INF/*.RSA", "META-INF/*.DSA",
+                "META-INF/DEPENDENCIES", "META-INF/LICENSE*", "META-INF/NOTICE*",
+                "META-INF/eclipse.inf", "META-INF/INDEX.LIST", "about.html", "plugin.properties"
+            )
         }
     }
 }
@@ -68,6 +74,11 @@ dependencies {
     // streams the request body from disk rather than loading it fully into
     // memory first, which matters for uploading a ~1GB release asset.
     implementation(libs.okhttp)
+
+    // Real git (clone / commit / push over HTTPS), the same protocol Termux's `git push` uses.
+    // One push carries any number of files in a single request, so the REST API's per-request
+    // size and requests-per-minute limits no longer apply to uploads into a repository.
+    implementation(libs.jgit)
 
     // Stores the GitHub Personal Access Token encrypted at rest via the
     // Android Keystore, rather than as plain text in regular

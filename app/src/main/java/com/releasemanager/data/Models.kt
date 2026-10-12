@@ -87,10 +87,7 @@ data class DeleteTarget(
 data class UploadItem(
     val path: String,
     val name: String,
-    val content: String,
-    /** Streamed items (big files): raw byte size, and a factory that opens the source again on every call. */
-    val streamSize: Long = -1,
-    val open: (() -> java.io.InputStream)? = null
+    val content: String
 )
 
 /**

@@ -30,9 +30,6 @@ import org.json.JSONTokener
 import java.io.File
 import java.io.OutputStream
 import java.net.URLEncoder
-import java.nio.ByteBuffer
-import java.nio.charset.CharacterCodingException
-import java.nio.charset.CodingErrorAction
 import java.util.concurrent.TimeUnit
 
 /**
@@ -174,6 +171,22 @@ class GitHubApi(private val token: String) {
         val req = authedRequest("https://api.github.com/user").get().build()
         val json = execute(req) ?: throw GitHubApiException("Empty response from GitHub", 0)
         return GitHubUser(login = json.getString("login"))
+    }
+
+    private var userLogin: String? = null
+
+    /**
+     * Starts an upload into [repo] that works like Termux's git: clone → copy files → one commit → one push.
+     * See [GitSession]. [report] runs on a background thread.
+     */
+    suspend fun openGitSession(
+        cacheDir: File,
+        repo: String,
+        branch: String,
+        report: (GitPhase, String, Int) -> Unit
+    ): GitSession {
+        val login = userLogin ?: verifyTokenAndGetUser().login.also { userLogin = it }
+        return GitSession.open(cacheDir, repo, branch, token, login, report)
     }
 
     // ── Repositories ─────────────────────────────────────────────────────
@@ -338,93 +351,6 @@ class GitHubApi(private val token: String) {
             authedRequest("https://api.github.com/repos/$repo/git/refs/heads/${encodePath(branch)}")
                 .patch(jsonBody(refPayload)).build()
         )
-    }
-
-    /**
-     * A NUL byte or any byte sequence that isn't valid UTF-8 means the file is binary.
-     * Only text can be inlined as tree `content`; binary needs a base64 blob (web: isSafeUtf8Text).
-     */
-    private fun isSafeUtf8Text(bytes: ByteArray): Boolean {
-        for (b in bytes) if (b == 0.toByte()) return false
-        return try {
-            Charsets.UTF_8.newDecoder()
-                .onMalformedInput(CodingErrorAction.REPORT)
-                .onUnmappableCharacter(CodingErrorAction.REPORT)
-                .decode(ByteBuffer.wrap(bytes))
-            true
-        } catch (e: CharacterCodingException) {
-            false
-        }
-    }
-
-    private val staleRefRegex =
-        Regex("reference cannot be updated|update is not a fast forward", RegexOption.IGNORE_CASE)
-
-    /**
-     * Commits [items] (base64 content) in one commit (web: uploadFiles).
-     *
-     * Text files are inlined into the tree-create call; binary files first get their own
-     * blob. Rapid back-to-back commits can hit "Reference cannot be updated" because
-     * GitHub's read-after-write consistency lags the previous ref update, so the HEAD
-     * read + tree + commit + ref update is retried with a small backoff, as on the web.
-     */
-    suspend fun uploadFiles(repo: String, branch: String, items: List<UploadItem>, message: String) {
-        try {
-            uploadFilesImpl(repo, branch, items, message)
-        } catch (e: OutOfMemoryError) {
-            throw GitHubApiException("Not enough memory to upload this many / this large files at once. Try fewer or smaller files.", 0)
-        }
-    }
-
-    private suspend fun uploadFilesImpl(repo: String, branch: String, items: List<UploadItem>, message: String) {
-        val treeItems = JSONArray()
-        val binaryItems = ArrayList<UploadItem>()
-        // Decoding and UTF-8 checking up to a few MB is CPU work: keep it off the main thread
-        withContext(Dispatchers.Default) {
-            var inlineBytes = 0L
-            for (f in items) {
-                if (f.open != null) { binaryItems.add(f); continue } // streamed from its source, never held in memory
-                val bytes = Base64.decode(f.content, Base64.DEFAULT)
-                if (isSafeUtf8Text(bytes) && inlineBytes + bytes.size <= INLINE_TEXT_BUDGET) {
-                    inlineBytes += bytes.size
-                    treeItems.put(
-                        JSONObject().put("path", f.path).put("mode", "100644").put("type", "blob")
-                            .put("content", String(bytes, Charsets.UTF_8))
-                    )
-                } else {
-                    binaryItems.add(f)
-                }
-            }
-        }
-        // Binary files (and text beyond the inline budget) go up as blobs, one at a time.
-        // A GitHub rate limit just pauses here and resumes — see call().
-        for (f in binaryItems) {
-            val open = f.open
-            val body = if (open != null) {
-                Base64JsonBody(open, f.streamSize)
-            } else {
-                jsonBody(JSONObject().put("content", f.content).put("encoding", "base64"))
-            }
-            val blob = call(
-                authedRequest("https://api.github.com/repos/$repo/git/blobs").post(body).build()
-            ) as JSONObject
-            treeItems.put(treeEntry(f.path, blob.getString("sha")))
-        }
-
-        var lastErr: GitHubApiException? = null
-        for (attempt in 0..MAX_REF_RETRIES) {
-            if (attempt > 0) delay(300L * attempt)
-            try {
-                val (commitSha, baseTreeSha) = getBranchTree(repo, branch)
-                commitTree(repo, branch, commitSha, baseTreeSha, treeItems, message.ifBlank { "Upload files" })
-                return
-            } catch (e: GitHubApiException) {
-                lastErr = e
-                val retryable = staleRefRegex.containsMatchIn(e.message.orEmpty())
-                if (!retryable || attempt == MAX_REF_RETRIES) throw e
-            }
-        }
-        throw lastErr ?: GitHubApiException("Upload failed", 0)
     }
 
     /** Deletes files (folders are expanded to their files) in one commit; returns the file count. */
@@ -671,14 +597,10 @@ class GitHubApi(private val token: String) {
     }
 
     private companion object {
-        const val MAX_REF_RETRIES = 4
-
         /** Rate-limit waits per request before giving up (each up to MAX_RATE_LIMIT_WAIT_SEC). */
         const val MAX_RATE_LIMIT_WAITS = 40
         const val MAX_RATE_LIMIT_WAIT_SEC = 3_700L
 
-        /** Text inlined into one tree-create request; the rest of a big chunk goes up as blobs. */
-        const val INLINE_TEXT_BUDGET = 3L * 1024 * 1024
     }
 }
 
@@ -711,41 +633,3 @@ private class ProgressRequestBody(
     }
 }
 
-/**
- * Blob-create request body `{"encoding":"base64","content":"<base64>"}` produced on the fly from a stream,
- * so a file of any size is sent in small pieces and never held in memory. The length is computed up front
- * (base64 = 4 bytes per 3), and [open] is called again on every attempt, so rate-limit retries just re-read the source.
- */
-private class Base64JsonBody(
-    private val open: () -> java.io.InputStream,
-    private val rawSize: Long
-) : RequestBody() {
-    private val prefix = "{\"encoding\":\"base64\",\"content\":\"".toByteArray()
-    private val suffix = "\"}".toByteArray()
-
-    override fun contentType() = "application/json".toMediaTypeOrNull()
-
-    override fun contentLength(): Long =
-        if (rawSize < 0) -1 else prefix.size + 4 * ((rawSize + 2) / 3) + suffix.size
-
-    override fun isOneShot() = false
-
-    override fun writeTo(sink: BufferedSink) {
-        sink.write(prefix)
-        open().use { input ->
-            val buf = ByteArray(3 * 16 * 1024) // multiple of 3: only the last piece carries '=' padding
-            while (true) {
-                var n = 0
-                while (n < buf.size) {
-                    val r = input.read(buf, n, buf.size - n)
-                    if (r < 0) break
-                    n += r
-                }
-                if (n == 0) break
-                sink.write(Base64.encode(buf, 0, n, Base64.NO_WRAP))
-                if (n < buf.size) break
-            }
-        }
-        sink.write(suffix)
-    }
-}

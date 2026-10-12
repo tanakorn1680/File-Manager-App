@@ -1,6 +1,6 @@
 package com.releasemanager.ui
 
-
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -11,12 +11,10 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import androidx.appcompat.widget.Toolbar
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.button.MaterialButton
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.releasemanager.R
 import com.releasemanager.data.GitHubApiException
 import com.releasemanager.data.ReleaseAsset
@@ -43,7 +41,8 @@ class ReleaseDetailActivity : AppCompatActivity() {
     private lateinit var btnCancelUpload: MaterialButton
     private lateinit var recyclerAssets: RecyclerView
     private lateinit var textEmptyAssets: TextView
-    private lateinit var btnDeleteRelease: MaterialButton
+    private lateinit var btnDeleteRelease: View
+    private lateinit var appToast: AppToast
 
     private lateinit var assetAdapter: AssetAdapter
     private var uploadJob: Job? = null
@@ -68,11 +67,16 @@ class ReleaseDetailActivity : AppCompatActivity() {
         if (token.isNullOrBlank()) { finish(); return }
         api = GitHubApi(token)
 
-        val toolbar = findViewById<Toolbar>(R.id.toolbar)
-        toolbar.title = tagName
-        toolbar.setNavigationOnClickListener { finish() }
+        appToast = AppToast(findViewById(R.id.toastView))
+
+        findViewById<TextView>(R.id.textTitle).text = tagName
+        findViewById<View>(R.id.btnBack).setOnClickListener { finish() }
 
         findViewById<TextView>(R.id.textTag).text = tagName
+        findViewById<View>(R.id.textDraft).visibility =
+            if (intent.getBooleanExtra(EXTRA_DRAFT, false)) View.VISIBLE else View.GONE
+        findViewById<View>(R.id.textPrerelease).visibility =
+            if (intent.getBooleanExtra(EXTRA_PRERELEASE, false)) View.VISIBLE else View.GONE
         findViewById<TextView>(R.id.textName).text = name?.ifBlank { tagName } ?: tagName
         val textBody = findViewById<TextView>(R.id.textBody)
         if (!body.isNullOrBlank()) {
@@ -89,7 +93,10 @@ class ReleaseDetailActivity : AppCompatActivity() {
         textEmptyAssets = findViewById(R.id.textEmptyAssets)
         btnDeleteRelease = findViewById(R.id.btnDeleteRelease)
 
-        assetAdapter = AssetAdapter { asset, position -> confirmDeleteAsset(asset, position) }
+        assetAdapter = AssetAdapter(
+            onOpen = { asset -> openAsset(asset) },
+            onDelete = { asset, position -> confirmDeleteAsset(asset, position) }
+        )
         recyclerAssets.layoutManager = LinearLayoutManager(this)
         recyclerAssets.adapter = assetAdapter
 
@@ -109,7 +116,7 @@ class ReleaseDetailActivity : AppCompatActivity() {
                 assetAdapter.submitList(assets)
                 textEmptyAssets.visibility = if (assets.isEmpty()) View.VISIBLE else View.GONE
             } catch (e: Exception) {
-                toast("Could not load assets: ${e.message}")
+                appToast.error("Could not load assets: ${e.message}")
             }
         }
     }
@@ -151,13 +158,13 @@ class ReleaseDetailActivity : AppCompatActivity() {
 
                 assetAdapter.addItem(asset)
                 textEmptyAssets.visibility = View.GONE
-                toast("Uploaded")
+                appToast.success("Uploaded")
             } catch (e: GitHubApiException) {
-                toast("Upload failed: ${e.message}")
+                appToast.error("Upload failed: ${e.message}", 5000)
             } catch (e: kotlinx.coroutines.CancellationException) {
-                toast("Upload cancelled")
+                appToast.show("Upload cancelled")
             } catch (e: Exception) {
-                toast("Upload failed: ${e.message}")
+                appToast.error("Upload failed: ${e.message}", 5000)
             } finally {
                 tempFile?.delete()
                 dropZone.visibility = View.VISIBLE
@@ -199,12 +206,12 @@ class ReleaseDetailActivity : AppCompatActivity() {
     // ── Delete ───────────────────────────────────────────────────────────
 
     private fun confirmDeleteAsset(asset: ReleaseAsset, position: Int) {
-        MaterialAlertDialogBuilder(this)
-            .setTitle("Delete file?")
-            .setMessage("Delete \"${asset.name}\" from this release?")
-            .setPositiveButton("Delete") { _, _ -> deleteAsset(asset, position) }
-            .setNegativeButton("Cancel", null)
-            .show()
+        Dialogs.confirm(
+            this,
+            title = "Delete file?",
+            body = "Delete \"${asset.name}\" from this release?",
+            positive = "Delete"
+        ) { deleteAsset(asset, position) }
     }
 
     private fun deleteAsset(asset: ReleaseAsset, position: Int) {
@@ -213,37 +220,42 @@ class ReleaseDetailActivity : AppCompatActivity() {
                 api.deleteAsset(repo, asset.id)
                 assetAdapter.removeAt(position)
                 if (assetAdapter.isEmpty()) textEmptyAssets.visibility = View.VISIBLE
-                toast("Deleted")
+                appToast.success("Deleted")
             } catch (e: Exception) {
-                toast("Could not delete: ${e.message}")
+                appToast.error("Could not delete: ${e.message}")
             }
         }
     }
 
     private fun confirmDeleteRelease() {
-        MaterialAlertDialogBuilder(this)
-            .setTitle("Delete release?")
-            .setMessage("Delete this release and all its assets? This cannot be undone.")
-            .setPositiveButton("Delete") { _, _ -> deleteRelease() }
-            .setNegativeButton("Cancel", null)
-            .show()
+        Dialogs.confirm(
+            this,
+            title = "Delete release?",
+            body = "Delete this release and all its assets? This cannot be undone.",
+            positive = "Delete"
+        ) { deleteRelease() }
     }
 
     private fun deleteRelease() {
         lifecycleScope.launch {
             try {
                 api.deleteRelease(repo, releaseId)
-                toast("Release deleted")
+                appToast.success("Release deleted")
                 setResult(RESULT_OK)
                 finish()
             } catch (e: Exception) {
-                toast("Could not delete release: ${e.message}")
+                appToast.error("Could not delete release: ${e.message}")
             }
         }
     }
 
-    private fun toast(message: String) {
-        android.widget.Toast.makeText(this, message, android.widget.Toast.LENGTH_LONG).show()
+    /** Web: the asset name is a link to its download URL. */
+    private fun openAsset(asset: ReleaseAsset) {
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(asset.browserDownloadUrl)))
+        } catch (e: ActivityNotFoundException) {
+            appToast.error("No app can open this link")
+        }
     }
 
     companion object {
@@ -252,5 +264,7 @@ class ReleaseDetailActivity : AppCompatActivity() {
         const val EXTRA_TAG_NAME = "extra_tag_name"
         const val EXTRA_NAME = "extra_name"
         const val EXTRA_BODY = "extra_body"
+        const val EXTRA_DRAFT = "extra_draft"
+        const val EXTRA_PRERELEASE = "extra_prerelease"
     }
 }

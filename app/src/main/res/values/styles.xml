@@ -67,7 +67,7 @@
     </style>
 
     <!-- ── Icon button (web .icon-btn: 40 x 40, 6px radius, 22px glyph) ───────── -->
-    <style name="App.IconButton">
+    <style name="App.IconButton" parent="">
         <item name="android:background">@drawable/bg_icon_btn</item>
         <item name="android:padding">9dp</item>
         <item name="android:scaleType">fitCenter</item>
@@ -75,7 +75,7 @@
     </style>
 
     <!-- ── Text ───────────────────────────────────────────────────────────────── -->
-    <style name="App.TopbarTitle">
+    <style name="App.TopbarTitle" parent="">
         <item name="android:textColor">@color/text_primary</item>
         <item name="android:textSize">17sp</item>
         <item name="android:textStyle">bold</item>
@@ -83,19 +83,19 @@
         <item name="android:ellipsize">end</item>
     </style>
 
-    <style name="App.FieldLabel">
+    <style name="App.FieldLabel" parent="">
         <item name="android:textColor">@color/text_muted</item>
         <item name="android:textSize">13sp</item>
         <item name="android:fontFamily">sans-serif-medium</item>
     </style>
 
-    <style name="App.DialogTitle">
+    <style name="App.DialogTitle" parent="">
         <item name="android:textColor">@color/text_primary</item>
         <item name="android:textSize">18sp</item>
         <item name="android:textStyle">bold</item>
     </style>
 
-    <style name="App.StateText">
+    <style name="App.StateText" parent="">
         <item name="android:textColor">@color/text_muted</item>
         <item name="android:textSize">15sp</item>
         <item name="android:gravity">center</item>
@@ -103,7 +103,7 @@
     </style>
 
     <!-- ── Inputs (web input.field / textarea.field) ──────────────────────────── -->
-    <style name="App.Input">
+    <style name="App.Input" parent="">
         <item name="android:background">@drawable/bg_input</item>
         <item name="android:paddingStart">14dp</item>
         <item name="android:paddingEnd">14dp</item>
@@ -115,7 +115,7 @@
     </style>
 
     <!-- ── Bottom-sheet row (web .sheet-item) ─────────────────────────────────── -->
-    <style name="App.SheetItem">
+    <style name="App.SheetItem" parent="">
         <item name="android:background">@drawable/bg_sheet_item</item>
         <item name="android:gravity">center_vertical</item>
         <item name="android:orientation">horizontal</item>

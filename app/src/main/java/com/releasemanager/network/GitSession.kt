@@ -1,6 +1,9 @@
 package com.releasemanager.network
 
+import android.os.SystemClock
 import com.releasemanager.data.GitHubApiException
+import com.releasemanager.util.copyStream
+import com.releasemanager.util.formatSize
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -13,12 +16,20 @@ import org.eclipse.jgit.api.errors.EmptyCommitException
 import org.eclipse.jgit.lib.BatchingProgressMonitor
 import org.eclipse.jgit.lib.PersonIdent
 import org.eclipse.jgit.storage.file.WindowCacheConfig
+import org.eclipse.jgit.transport.HttpTransport
 import org.eclipse.jgit.transport.RefSpec
 import org.eclipse.jgit.transport.RemoteRefUpdate
+import org.eclipse.jgit.transport.http.HttpConnection
+import org.eclipse.jgit.transport.http.HttpConnectionFactory
+import org.eclipse.jgit.transport.http.JDKHttpConnectionFactory
 import org.eclipse.jgit.transport.UsernamePasswordCredentialsProvider
 import org.eclipse.jgit.util.FS
 import java.io.File
+import java.io.FilterOutputStream
 import java.io.InputStream
+import java.io.OutputStream
+import java.net.Proxy
+import java.net.URL
 
 enum class GitPhase { CLONE, PUSH, OTHER }
 
@@ -42,11 +53,30 @@ class GitSession private constructor(
 ) {
     private val paths = ArrayList<String>()
 
-    /** Copies one file into the working copy; [open] is called on a background thread. */
-    suspend fun addFile(path: String, open: () -> InputStream) = withContext(Dispatchers.IO) {
+    /** Bytes of loose objects the fresh clone already had (small clones are unpacked); the push is measured against what was added since. */
+    private var looseBaseline = 0L
+
+    /** Size of the loose objects in the working copy: after `git add` these are the files, zlib-compressed — what the push will send. */
+    private fun looseObjectBytes(): Long {
+        var sum = 0L
+        File(git.repository.directory, "objects").listFiles()?.forEach { d ->
+            if (d.isDirectory && d.name.length == 2) d.listFiles()?.forEach { sum += it.length() }
+        }
+        return sum
+    }
+
+    /**
+     * Copies one file into the working copy; [open] is called on a background thread.
+     * [onBytes] gets the number of bytes copied so far for this file (so a big file moves the bar while it copies).
+     */
+    suspend fun addFile(path: String, onBytes: ((Long) -> Unit)? = null, open: () -> InputStream) = withContext(Dispatchers.IO) {
         try {
             val target = targetFor(path)
-            open().use { src -> target.outputStream().use { src.copyTo(it, 64 * 1024) } }
+            open().use { src ->
+                target.outputStream().use { dst ->
+                    copyStream(src, dst, -1L) { done, _ -> onBytes?.invoke(done) }
+                }
+            }
             paths.add(path)
         } catch (e: Throwable) {
             throw friendly(e)
@@ -94,13 +124,26 @@ class GitSession private constructor(
             cfg.save()
 
             report(GitPhase.PUSH, "Pushing…", -1)
-            val results = git.push()
-                .setRemote("origin")
-                .setRefSpecs(RefSpec("HEAD:refs/heads/$branch"))
-                .setCredentialsProvider(credentials(token))
-                .setProgressMonitor(Monitor(GitPhase.PUSH, "Pushing", job, report))
-                .setTimeout(1800)
-                .call()
+            // JGit only counts objects while writing the pack, so one big file would sit still and then jump.
+            // The bytes that really go out on the connection are counted instead (see WireTap).
+            val monitor = Monitor(GitPhase.PUSH, "Pushing", job, report)
+            val total = (looseObjectBytes() - looseBaseline).coerceAtLeast(1L)
+            var sent = 0L
+            WireTap.begin { n ->
+                sent += n
+                monitor.onWire(sent, total)
+            }
+            val results = try {
+                git.push()
+                    .setRemote("origin")
+                    .setRefSpecs(RefSpec("HEAD:refs/heads/$branch"))
+                    .setCredentialsProvider(credentials(token))
+                    .setProgressMonitor(monitor)
+                    .setTimeout(1800)
+                    .call()
+            } finally {
+                WireTap.end()
+            }
 
             for (r in results) {
                 for (u in r.remoteUpdates) {
@@ -141,6 +184,15 @@ class GitSession private constructor(
         private val report: (GitPhase, String, Int) -> Unit
     ) : BatchingProgressMonitor() {
 
+        /**
+         * Percent (0–100) of the whole clone / push. JGit starts every task (counting, compressing, writing …)
+         * at 0 % again, so the per-task percentages are placed in their slice of the phase and the result
+         * only ever moves forward — that is what lets a progress bar follow the real work.
+         */
+        @Volatile private var overall = 0
+        private var wireSeen = false
+        private var lastWire = 0L
+
         override fun onUpdate(taskName: String, workCurr: Int) = emit(taskName, -1)
 
         override fun onEndTask(taskName: String, workCurr: Int) = emit(taskName, -1)
@@ -153,8 +205,54 @@ class GitSession private constructor(
 
         override fun isCancelled(): Boolean = job?.isActive == false
 
+        /** JGit calls the callbacks above from its own timer thread, the byte counter from the push thread. */
+        @Synchronized
         private fun emit(title: String, pct: Int) {
-            report(phase, if (pct >= 0) "$label — $title $pct%" else "$label — $title…", pct)
+            // Once real bytes are flowing they drive the "writing" part of the push
+            if (wireSeen && title.contains("writing", ignoreCase = true)) return
+            val text = if (pct >= 0) "$label — $title $pct%" else "$label — $title…"
+            if (pct >= 0) overall = maxOf(overall, phasePercent(title, pct))
+            // The text carries the task's own percentage; the number handed on is the phase's overall one
+            report(phase, text, if (pct >= 0) overall else -1)
+        }
+
+        /**
+         * Bytes of the pack that have really been written to the connection ([sent] of about [total]).
+         * They fill the same slice of the bar that JGit's own "writing" step would, but follow the data itself.
+         */
+        @Synchronized
+        fun onWire(sent: Long, total: Long) {
+            val now = SystemClock.elapsedRealtime()
+            val finished = sent >= total
+            if (!finished && wireSeen && now - lastWire < WIRE_GAP_MS) return
+            wireSeen = true
+            lastWire = now
+            val frac = (sent.toDouble() / total).coerceIn(0.0, 1.0)
+            overall = maxOf(overall, (WRITE_FROM + (WRITE_TO - WRITE_FROM) * frac).toInt())
+            val text = if (finished) "$label — waiting for GitHub…"
+            else "$label — ${formatSize(sent)} / ${formatSize(total)}"
+            report(phase, text, overall)
+        }
+
+        /** Where JGit's task [title] sits inside the clone / push, as a percentage of the whole phase. */
+        private fun phasePercent(title: String, pct: Int): Int {
+            val (lo, hi) = when (phase) {
+                GitPhase.CLONE -> when {
+                    title.contains("receiving", ignoreCase = true) -> 0 to 80
+                    title.contains("resolving", ignoreCase = true) -> 80 to 92
+                    title.contains("checking out", ignoreCase = true) -> 92 to 100
+                    else -> return overall
+                }
+                else -> when {
+                    title.contains("finding", ignoreCase = true) -> 0 to 5
+                    title.contains("counting", ignoreCase = true) -> 5 to 12
+                    title.contains("compressing", ignoreCase = true) -> 12 to 25
+                    // Real bytes leave the phone here; stop short of 100 % until GitHub has accepted the push
+                    title.contains("writing", ignoreCase = true) -> WRITE_FROM to WRITE_TO
+                    else -> return overall
+                }
+            }
+            return lo + (hi - lo) * pct.coerceIn(0, 100) / 100
         }
     }
 
@@ -167,6 +265,7 @@ class GitSession private constructor(
             if (configured) return
             // Android has no real home directory; JGit looks for ~/.gitconfig there
             System.setProperty("user.home", home.absolutePath)
+            WireTap.install()
             FS.DETECTED.setUserHome(home)
             // Keep JGit's caches small and stream anything big instead of loading it
             WindowCacheConfig().apply {
@@ -202,7 +301,7 @@ class GitSession private constructor(
                     .setProgressMonitor(Monitor(GitPhase.CLONE, "Cloning", job, report))
                     .setTimeout(1800)
                     .call()
-                GitSession(dir, git, login, branch, token, report)
+                GitSession(dir, git, login, branch, token, report).also { it.looseBaseline = it.looseObjectBytes() }
             } catch (e: Throwable) {
                 root.deleteRecursively()
                 throw friendly(e)
@@ -223,6 +322,57 @@ class GitSession private constructor(
                     m.contains("not found", ignoreCase = true) ->
                         GitHubApiException("Repository or branch not found: $m", 404)
                     else -> GitHubApiException(m.ifBlank { e.javaClass.simpleName }, 0)
+                }
+            }
+        }
+    }
+}
+
+/** Where the "writing objects" step sits inside the push, in percent of the whole push. */
+private const val WRITE_FROM = 25
+private const val WRITE_TO = 97
+private const val WIRE_GAP_MS = 250L
+
+/**
+ * Counts the bytes of every request body JGit sends from the current thread. JGit's HTTP transport asks a
+ * connection factory for each connection; this one hands out the stock connections wrapped so that what is
+ * written to them is reported — that is the push really leaving the phone, byte by byte.
+ */
+private object WireTap {
+    private val sink = ThreadLocal<((Long) -> Unit)?>()
+
+    fun install() {
+        HttpTransport.setConnectionFactory(TapFactory(JDKHttpConnectionFactory()))
+    }
+
+    fun begin(onBytes: (Long) -> Unit) = sink.set(onBytes)
+
+    fun end() = sink.remove()
+
+    fun current(): ((Long) -> Unit)? = sink.get()
+
+    private class TapFactory(private val inner: HttpConnectionFactory) : HttpConnectionFactory by inner {
+        override fun create(url: URL): HttpConnection = TapConnection(inner.create(url), current())
+
+        override fun create(url: URL, proxy: Proxy?): HttpConnection = TapConnection(inner.create(url, proxy), current())
+    }
+
+    private class TapConnection(
+        private val inner: HttpConnection,
+        private val onBytes: ((Long) -> Unit)?
+    ) : HttpConnection by inner {
+        override fun getOutputStream(): OutputStream {
+            val out = inner.outputStream
+            val count = onBytes ?: return out
+            return object : FilterOutputStream(out) {
+                override fun write(b: Int) {
+                    out.write(b)
+                    count(1L)
+                }
+
+                override fun write(b: ByteArray, off: Int, len: Int) {
+                    out.write(b, off, len)
+                    count(len.toLong())
                 }
             }
         }

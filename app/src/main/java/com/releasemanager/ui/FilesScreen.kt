@@ -376,12 +376,18 @@ class FilesScreen(private val ctx: AppContext) {
         // Staged-only files (sha == null) are not on GitHub yet: nothing to open, download or rename
         val onGitHub = file.sha != null
         if (!file.isDir && onGitHub) {
-            items.add(Dialogs.SheetItem("Open", R.drawable.ic_external, onClick = { saveCopy(file) }))
-        }
-        if (!file.isDir && isTextFile(file.name)) {
-            items.add(Dialogs.SheetItem("Edit", R.drawable.ic_edit_square, onClick = {
-                ctx.editor.open(EditingFile(file.path, file.sha, file.name))
-            }))
+            // Text files open straight into the in-app editor (no download needed); anything else
+            // still falls back to saving a copy, since there is nothing in-app to view it with.
+            val editable = isTextFile(file.name)
+            items.add(
+                Dialogs.SheetItem(
+                    "Open", if (editable) R.drawable.ic_edit_square else R.drawable.ic_external,
+                    onClick = {
+                        if (editable) ctx.editor.open(EditingFile(file.path, file.sha, file.name))
+                        else saveCopy(file)
+                    }
+                )
+            )
         }
         if (!file.isDir && onGitHub) {
             items.add(Dialogs.SheetItem("Download", R.drawable.ic_download, onClick = { saveCopy(file) }))

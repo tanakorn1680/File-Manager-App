@@ -141,13 +141,6 @@ class GitSession private constructor(
         private val report: (GitPhase, String, Int) -> Unit
     ) : BatchingProgressMonitor() {
 
-        /**
-         * Percent (0–100) of the whole clone / push. JGit starts every task (counting, compressing, writing …)
-         * at 0 % again, so the per-task percentages are placed in their slice of the phase and the result
-         * only ever moves forward — that is what lets a progress bar follow the real work.
-         */
-        private var overall = 0
-
         override fun onUpdate(taskName: String, workCurr: Int) = emit(taskName, -1)
 
         override fun onEndTask(taskName: String, workCurr: Int) = emit(taskName, -1)
@@ -161,31 +154,7 @@ class GitSession private constructor(
         override fun isCancelled(): Boolean = job?.isActive == false
 
         private fun emit(title: String, pct: Int) {
-            val text = if (pct >= 0) "$label — $title $pct%" else "$label — $title…"
-            if (pct >= 0) overall = maxOf(overall, phasePercent(title, pct))
-            // The text carries the task's own percentage; the number handed on is the phase's overall one
-            report(phase, text, if (pct >= 0) overall else -1)
-        }
-
-        /** Where JGit's task [title] sits inside the clone / push, as a percentage of the whole phase. */
-        private fun phasePercent(title: String, pct: Int): Int {
-            val (lo, hi) = when (phase) {
-                GitPhase.CLONE -> when {
-                    title.contains("receiving", ignoreCase = true) -> 0 to 80
-                    title.contains("resolving", ignoreCase = true) -> 80 to 92
-                    title.contains("checking out", ignoreCase = true) -> 92 to 100
-                    else -> return overall
-                }
-                else -> when {
-                    title.contains("finding", ignoreCase = true) -> 0 to 5
-                    title.contains("counting", ignoreCase = true) -> 5 to 12
-                    title.contains("compressing", ignoreCase = true) -> 12 to 25
-                    // Real bytes leave the phone here; stop short of 100 % until GitHub has accepted the push
-                    title.contains("writing", ignoreCase = true) -> 25 to 97
-                    else -> return overall
-                }
-            }
-            return lo + (hi - lo) * pct.coerceIn(0, 100) / 100
+            report(phase, if (pct >= 0) "$label — $title $pct%" else "$label — $title…", pct)
         }
     }
 

@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Web: .upload-zone (2px dashed border, 6px radius) -->
+<!-- Web: .upload-zone (dashed border, 14dp radius on a surface fill) -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
-    <solid android:color="@color/transparent" />
+    <solid android:color="@color/surface" />
     <stroke
-        android:width="2dp"
+        android:width="1.5dp"
         android:color="@color/border"
         android:dashWidth="6dp"
         android:dashGap="4dp" />
-    <corners android:radius="6dp" />
+    <corners android:radius="14dp" />
 </shape>

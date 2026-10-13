@@ -1,5 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Same dark tile colour as the app logo (GitHub.png) -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android">
-    <solid android:color="#1B1E23"/>
+    <solid android:color="#1B1F23"/>
 </shape>

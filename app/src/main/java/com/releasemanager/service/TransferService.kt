@@ -12,7 +12,6 @@ import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
-import androidx.core.content.ContextCompat
 import com.releasemanager.R
 import com.releasemanager.ui.MainActivity
 import com.releasemanager.ui.userMessage
@@ -187,13 +186,11 @@ class TransferService : Service(), TransferManager.Listener {
 
     private fun verb(t: Transfer) = if (t.kind == TransferKind.UPLOAD) "Uploading" else "Downloading"
 
-    /** The app logo (white shape, as status-bar icons must be) for every notification; the accent colour tints it in the shade. */
-    private fun accent() = ContextCompat.getColor(this, R.color.accent)
+    private fun icon(t: Transfer) = if (t.kind == TransferKind.UPLOAD) R.drawable.ic_upload else R.drawable.ic_download
 
     private fun progressNotification(t: Transfer): Notification {
         val b = NotificationCompat.Builder(this, CHANNEL_PROGRESS)
-            .setSmallIcon(R.drawable.ic_stat_logo)
-            .setColor(accent())
+            .setSmallIcon(icon(t))
             .setContentTitle("${verb(t)} ${t.title}")
             .setContentText(t.label.ifBlank { "Starting…" })
             .setContentIntent(openApp())
@@ -217,8 +214,7 @@ class TransferService : Service(), TransferManager.Listener {
         val ok = t.state == TransferState.SUCCESS
         val noun = if (t.kind == TransferKind.UPLOAD) "Upload" else "Download"
         return NotificationCompat.Builder(this, CHANNEL_DONE)
-            .setSmallIcon(R.drawable.ic_stat_logo)
-            .setColor(accent())
+            .setSmallIcon(icon(t))
             .setContentTitle(if (ok) "$noun complete" else "$noun failed")
             .setContentText(if (ok) t.message ?: t.title else "${t.title}: ${t.message ?: "error"}")
             .setStyle(NotificationCompat.BigTextStyle().bigText(if (ok) t.message ?: t.title else "${t.title}: ${t.message ?: "error"}"))
@@ -233,8 +229,8 @@ class TransferService : Service(), TransferManager.Listener {
 
     private fun placeholder(): Notification =
         NotificationCompat.Builder(this, CHANNEL_PROGRESS)
-            .setSmallIcon(R.drawable.ic_stat_logo)
-            .setContentTitle(getString(R.string.app_name))
+            .setSmallIcon(R.drawable.ic_upload)
+            .setContentTitle("Release Manager")
             .setSilent(true)
             .build()
 

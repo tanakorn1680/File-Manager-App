@@ -1,31 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Web: .repo-item / .file-item — flat full-width row, 1px bottom border.
-     :active → page bg, .selected → accent-light (set via View.isActivated). -->
-<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:bottom="1dp">
-        <selector>
-            <item android:state_pressed="true">
-                <shape android:shape="rectangle">
-                    <solid android:color="@color/bg" />
-                </shape>
-            </item>
-            <item android:state_activated="true">
-                <shape android:shape="rectangle">
-                    <solid android:color="@color/accent_light" />
-                </shape>
-            </item>
-            <item>
-                <shape android:shape="rectangle">
-                    <solid android:color="@color/surface" />
-                </shape>
-            </item>
-        </selector>
-    </item>
-    <item
-        android:height="1dp"
-        android:gravity="bottom">
+<!-- List row as a rounded card (the item layouts give it a 12dp side / 4dp vertical margin).
+     pressed → raised surface, activated (selected) → accent tint + accent outline (View.isActivated). -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_pressed="true">
         <shape android:shape="rectangle">
-            <solid android:color="@color/border" />
+            <solid android:color="@color/surface_hover" />
+            <stroke android:width="1dp" android:color="@color/border" />
+            <corners android:radius="12dp" />
         </shape>
     </item>
-</layer-list>
+    <item android:state_activated="true">
+        <shape android:shape="rectangle">
+            <solid android:color="@color/accent_light" />
+            <stroke android:width="1dp" android:color="@color/accent" />
+            <corners android:radius="12dp" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@color/surface" />
+            <stroke android:width="1dp" android:color="@color/border" />
+            <corners android:radius="12dp" />
+        </shape>
+    </item>
+</selector>

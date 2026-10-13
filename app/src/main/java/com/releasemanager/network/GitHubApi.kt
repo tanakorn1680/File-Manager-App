@@ -503,23 +503,6 @@ class GitHubApi(private val token: String) {
         }
     }
 
-    /**
-     * Streams the whole repository at [ref] (a branch, tag or sha) as a ZIP into [sink] (does not close it).
-     * GitHub builds it on the fly and redirects to its download host, so the length is usually not known.
-     * The files sit inside one top-level folder named after the repo and commit.
-     */
-    suspend fun downloadRepoZip(
-        repo: String,
-        ref: String,
-        sink: OutputStream,
-        onProgress: ((done: Long, total: Long) -> Unit)? = null
-    ) {
-        withContext(Dispatchers.IO) {
-            val req = authedRequest("https://api.github.com/repos/$repo/zipball/${encodePath(ref)}").get().build()
-            streamResponse(req, sink, onProgress)
-        }
-    }
-
     /** Jobs of a run (latest attempt) with their steps — tells which step failed. */
     suspend fun listRunJobs(repo: String, runId: Long): List<WorkflowJob> {
         val data = call(

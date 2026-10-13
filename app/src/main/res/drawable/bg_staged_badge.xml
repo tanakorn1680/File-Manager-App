@@ -1,6 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- Web: .staged-badge / .dialog-staged-count -->
-<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
-    <solid android:color="@color/warning" />
-    <corners android:radius="11dp" />
-</shape>

@@ -147,6 +147,8 @@ class UploadScreen(private val ctx: AppContext) {
                 if (sizeIdx >= 0 && !cursor.isNull(sizeIdx)) size = cursor.getLong(sizeIdx)
             }
         }
+        // A copy made for a source that cannot be kept readable (see UriAccess.copyToCache) is a plain file
+        if (size < 0 && uri.scheme == "file") size = uri.path?.let { File(it).length() } ?: -1L
         return Picked(uri, name ?: uri.lastPathSegment ?: "file", size)
     }
 

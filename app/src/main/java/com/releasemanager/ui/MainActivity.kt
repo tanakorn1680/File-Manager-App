@@ -19,6 +19,8 @@ import com.releasemanager.R
 import com.releasemanager.data.AppState
 import com.releasemanager.data.TokenStore
 import com.releasemanager.network.UriAccess
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * Single-activity host. Every web `.screen` is an <include>d layout in activity_main.xml with its
@@ -53,20 +55,16 @@ class MainActivity : AppCompatActivity() {
     private var pickZipCallback: ((Uri?) -> Unit)? = null
     private var createDocumentCallback: ((Uri?) -> Unit)? = null
 
-    private val pickFilesLauncher = registerForActivityResult(
-        ActivityResultContracts.OpenMultipleDocuments()
-    ) { uris ->
+    private val pickFilesLauncher = registerForActivityResult(PickContent(multiple = true)) { uris ->
         val callback = pickFilesCallback
         pickFilesCallback = null
         callback?.invoke(uris)
     }
 
-    private val pickZipLauncher = registerForActivityResult(
-        ActivityResultContracts.OpenDocument()
-    ) { uri ->
+    private val pickZipLauncher = registerForActivityResult(PickContent(multiple = false)) { uris ->
         val callback = pickZipCallback
         pickZipCallback = null
-        callback?.invoke(uri)
+        callback?.invoke(uris.firstOrNull())
     }
 
     private val createDocumentLauncher = registerForActivityResult(CreateDocument()) { uri ->
@@ -93,20 +91,35 @@ class MainActivity : AppCompatActivity() {
     // taken — and a transfer must keep reading/writing after the app was closed, so every picked Uri gets one
     // here (the transfer gives it back when it ends).
 
-    /** Upload Files: any files, several at once. */
-    fun pickFiles(onResult: (List<Uri>) -> Unit) {
-        pickFilesCallback = { uris ->
-            uris.forEach { UriAccess.persist(contentResolver, it, write = false) }
-            onResult(uris)
+    /**
+     * Keeps every picked Uri readable after the app is closed: a persistable grant where the source allows it,
+     * otherwise (most "other apps") a copy in the app cache. The copy is made here, while the app is open.
+     */
+    private fun keepReadable(uris: List<Uri>, onReady: (List<Uri>) -> Unit) {
+        val kept = uris.map { it to UriAccess.persist(contentResolver, it, write = false) }
+        if (kept.all { it.second }) {
+            onReady(uris)
+            return
         }
+        ctx.toast.show("Copying from the other app…")
+        ctx.launchSafe {
+            val ready = withContext(Dispatchers.IO) {
+                kept.map { (uri, ok) -> if (ok) uri else UriAccess.copyToCache(contentResolver, cacheDir, uri) }
+            }
+            onReady(ready)
+        }
+    }
+
+    /** Upload Files: any files, several at once, from any app. */
+    fun pickFiles(onResult: (List<Uri>) -> Unit) {
+        pickFilesCallback = { uris -> keepReadable(uris, onResult) }
         pickFilesLauncher.launch(arrayOf("*/*"))
     }
 
-    /** Upload ZIP: one document (some providers label ZIPs as octet-stream, so that is allowed too). */
+    /** Upload ZIP: one document (some sources label ZIPs as octet-stream, so that is allowed too). */
     fun pickZip(onResult: (Uri?) -> Unit) {
         pickZipCallback = { uri ->
-            if (uri != null) UriAccess.persist(contentResolver, uri, write = false)
-            onResult(uri)
+            if (uri == null) onResult(null) else keepReadable(listOf(uri)) { onResult(it.first()) }
         }
         pickZipLauncher.launch(
             arrayOf("application/zip", "application/x-zip-compressed", "application/x-zip", "application/octet-stream")

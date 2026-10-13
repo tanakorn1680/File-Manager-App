@@ -4,6 +4,7 @@ import android.content.ContentResolver
 import android.content.Intent
 import android.net.Uri
 import android.provider.DocumentsContract
+import android.provider.OpenableColumns
 import com.releasemanager.data.FileEntry
 import com.releasemanager.service.TransferOutcome
 import com.releasemanager.service.TransferProgress
@@ -40,16 +41,52 @@ class PushSource(val path: String, val open: () -> InputStream)
  * unless the app takes a persistable grant — which is what lets a transfer outlive the screen.
  */
 object UriAccess {
-    fun persist(cr: ContentResolver, uri: Uri, write: Boolean) {
+    /** True when the grant was kept, i.e. the Uri stays readable after the app is closed. */
+    fun persist(cr: ContentResolver, uri: Uri, write: Boolean): Boolean {
         val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or (if (write) Intent.FLAG_GRANT_WRITE_URI_PERMISSION else 0)
-        try {
+        return try {
             cr.takePersistableUriPermission(uri, flags)
+            true
         } catch (_: Exception) {
-            // A provider without persistable grants: the Uri still works while the app is open
+            // A source without persistable grants (most "other apps"): the Uri only works while the app is open
+            false
         }
     }
 
+    /**
+     * For a Uri that cannot be kept: copies the file into the app's cache (keeping its name) and returns a
+     * file Uri that stays readable for as long as the transfer needs it. [release] deletes the copy again.
+     */
+    fun copyToCache(cr: ContentResolver, cacheDir: File, uri: Uri): Uri {
+        var name: String? = null
+        cr.query(uri, null, null, null, null)?.use { c ->
+            val i = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            if (i >= 0 && c.moveToFirst()) name = c.getString(i)
+        }
+        val safe = (name ?: uri.lastPathSegment ?: "file").substringAfterLast('/').ifBlank { "file" }
+        val dir = File(File(cacheDir, PICKED_DIR), System.nanoTime().toString()).apply { mkdirs() }
+        val out = File(dir, safe)
+        try {
+            val input = cr.openInputStream(uri) ?: throw IOException("Could not read the selected file")
+            input.use { src -> out.outputStream().use { dst -> src.copyTo(dst, 64 * 1024) } }
+        } catch (e: Throwable) {
+            out.delete()
+            dir.delete()
+            throw e
+        }
+        return Uri.fromFile(out)
+    }
+
     fun release(cr: ContentResolver, uri: Uri) {
+        if (uri.scheme == "file") {
+            // A copy made by copyToCache(): the transfer is over, so it goes
+            val f = uri.path?.let { File(it) }
+            if (f != null && f.parentFile?.parentFile?.name == PICKED_DIR) {
+                f.delete()
+                f.parentFile?.delete()
+            }
+            return
+        }
         try {
             cr.releasePersistableUriPermission(
                 uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
@@ -58,6 +95,8 @@ object UriAccess {
             // Nothing was persisted for it
         }
     }
+
+    private const val PICKED_DIR = "picked"
 }
 
 // ── ZIP scanning (shared by the stage-mode screen code and the background upload) ────────────────

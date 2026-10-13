@@ -31,7 +31,9 @@ import com.releasemanager.service.TransferKind
 import com.releasemanager.service.TransferManager
 import com.releasemanager.service.TransferState
 import com.releasemanager.util.formatSize
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class ReleaseDetailActivity : AppCompatActivity() {
 
@@ -59,11 +61,9 @@ class ReleaseDetailActivity : AppCompatActivity() {
     private var uploadTransfer: Transfer? = null
     private val transferListener = TransferManager.Listener { t -> onTransferUpdate(t) }
 
-    // OpenDocument rather than GetContent: only its Uri can be kept readable after the app is closed
-    private val pickFileLauncher = registerForActivityResult(
-        ActivityResultContracts.OpenDocument()
-    ) { uri: Uri? ->
-        if (uri != null) startUpload(uri)
+    // Every source (document providers and other apps); a Uri that cannot be kept readable is copied first
+    private val pickFileLauncher = registerForActivityResult(PickContent(multiple = false)) { uris ->
+        uris.firstOrNull()?.let { keepReadableThenUpload(it) }
     }
 
     private val notifPermLauncher = registerForActivityResult(
@@ -158,10 +158,24 @@ class ReleaseDetailActivity : AppCompatActivity() {
 
     // ── Upload ───────────────────────────────────────────────────────────
 
-    private fun startUpload(uri: Uri) {
-        // Keep the Uri readable after the app is closed; the background upload gives it back when done
-        UriAccess.persist(contentResolver, uri, write = false)
+    /** A persistable grant where the source allows it; otherwise the file is copied into the app cache first. */
+    private fun keepReadableThenUpload(uri: Uri) {
+        if (UriAccess.persist(contentResolver, uri, write = false)) {
+            startUpload(uri)
+            return
+        }
+        appToast.show("Copying from the other app…")
+        lifecycleScope.launch {
+            try {
+                val copy = withContext(Dispatchers.IO) { UriAccess.copyToCache(contentResolver, cacheDir, uri) }
+                startUpload(copy)
+            } catch (e: Exception) {
+                appToast.error("Could not read the file: ${e.message}")
+            }
+        }
+    }
 
+    private fun startUpload(uri: Uri) {
         val fileName = queryFileName(uri) ?: "upload_${System.currentTimeMillis()}"
         val size = queryFileSize(uri)
         if (size >= RELEASE_ASSET_LIMIT_BYTES) {
@@ -241,6 +255,7 @@ class ReleaseDetailActivity : AppCompatActivity() {
 
     /** Exact size in bytes as the file provider reports it, or -1 when it does not. */
     private fun queryFileSize(uri: Uri): Long {
+        if (uri.scheme == "file") return uri.path?.let { java.io.File(it).length() } ?: -1L
         var size = -1L
         contentResolver.query(uri, null, null, null, null)?.use { cursor ->
             val idx = cursor.getColumnIndex(OpenableColumns.SIZE)
@@ -252,6 +267,7 @@ class ReleaseDetailActivity : AppCompatActivity() {
     }
 
     private fun queryFileName(uri: Uri): String? {
+        if (uri.scheme == "file") return uri.path?.let { java.io.File(it).name }
         var name: String? = null
         contentResolver.query(uri, null, null, null, null)?.use { cursor ->
             val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)

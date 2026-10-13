@@ -416,8 +416,9 @@ class FilesScreen(private val ctx: AppContext) {
         val cr = act.applicationContext.contentResolver
         val path = file.path
         val name = file.name
+        val size = file.size
         ctx.startDownload(name) { progress ->
-            DownloadJobs.file(api, cr, uri, repo, path, branch, name, progress)
+            DownloadJobs.file(api, cr, uri, repo, path, branch, name, progress, size)
         }
     }
 

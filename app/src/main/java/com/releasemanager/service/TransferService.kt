@@ -193,7 +193,7 @@ class TransferService : Service(), TransferManager.Listener {
         val b = NotificationCompat.Builder(this, CHANNEL_PROGRESS)
             .setSmallIcon(icon(t))
             .setLargeIcon(NotifIcons.logo(this))
-            .setColor(ContextCompat.getColor(this, R.color.accent))
+            .setColor(ContextCompat.getColor(this, R.color.warning_text))
             .setContentTitle("${verb(t)} ${t.title}")
             .setContentText(t.label.ifBlank { "Starting…" })
             .setContentIntent(openApp())

@@ -827,34 +827,13 @@ class FilesScreen(private val ctx: AppContext) {
     private companion object {
         const val MAX_STAGED_ROWS = 200
 
-        // Web: isTextFile() — the Edit action is only offered for these. Kept broad: a file whose
-        // extension isn't recognised here still falls back to "Open externally", and even a file
-        // that does land in the editor is caught by getFile()'s own >1MB / non-text guard.
+        // Web: isTextFile() — the Edit action is only offered for these
         val TEXT_EXTENSIONS = setOf(
-            // Plain text / docs
-            "txt", "md", "markdown", "mdx", "rst", "adoc", "asciidoc", "tex", "rtf", "nfo", "me",
-            "readme", "license", "changelog", "authors", "contributing", "todo", "log", "csv", "tsv",
-            // Web
-            "html", "htm", "xhtml", "css", "scss", "sass", "less", "js", "mjs", "cjs", "ts", "tsx",
-            "jsx", "vue", "svelte", "astro", "json", "json5", "jsonc", "webmanifest", "map",
-            // Markup / data / config
-            "xml", "svg", "yaml", "yml", "toml", "ini", "cfg", "conf", "config", "properties",
-            "env", "editorconfig", "prettierrc", "eslintrc", "babelrc", "npmrc", "nvmrc",
-            "stylelintrc", "browserslistrc", "htaccess", "plist", "proto", "graphql", "gql",
-            // Shell / scripting
-            "sh", "bash", "zsh", "fish", "bat", "cmd", "ps1", "psm1", "awk", "sed",
-            // Languages
-            "py", "pyw", "pyi", "rb", "erb", "php", "phtml", "java", "kt", "kts", "gradle",
-            "groovy", "c", "h", "cpp", "cc", "cxx", "hpp", "hh", "m", "mm", "cs", "go", "rs",
-            "swift", "dart", "lua", "pl", "pm", "r", "jl", "scala", "clj", "cljs", "ex", "exs",
-            "erl", "hrl", "hs", "elm", "nim", "zig", "v", "sol", "cu", "cuh", "asm", "s",
-            // Build / project files (no extension or dotfile forms)
-            "gitignore", "gitattributes", "gitmodules", "dockerignore", "dockerfile", "makefile",
-            "cmake", "cmakelists", "gemfile", "rakefile", "podfile", "procfile", "lock", "mod",
-            "sum", "toc", "nuspec", "csproj", "sln", "vcxproj", "pro", "pri",
-            // Data / query / misc text
-            "sql", "graphqls", "diff", "patch", "srt", "vtt", "po", "pot", "desktop", "service",
-            "unit", "reg", "manifest", "resx", "strings", "xcconfig", "entitlements", "pbxproj"
+            "txt", "md", "html", "htm", "css", "js", "ts", "jsx", "tsx", "json", "xml",
+            "yaml", "yml", "toml", "ini", "cfg", "conf", "sh", "bash", "zsh", "py", "rb",
+            "php", "java", "c", "cpp", "h", "hpp", "cs", "go", "rs", "swift", "kt", "vue",
+            "svelte", "sql", "gitignore", "env", "lock", "log", "csv", "svg", "dockerfile",
+            "makefile", "editorconfig", "prettierrc", "eslintrc", "babelrc"
         )
 
         fun isTextFile(name: String): Boolean {

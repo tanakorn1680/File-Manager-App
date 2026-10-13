@@ -19,13 +19,6 @@ fun View.hideKeyboard() {
     imm?.hideSoftInputFromWindow(windowToken, 0)
 }
 
-/** Requests focus on [this] and asks the IME to show for it (pairs with [hideKeyboard]). */
-fun View.showKeyboard() {
-    requestFocus()
-    val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
-    imm?.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
-}
-
 /** MIME type guessed from the file extension, for the "save as" picker. */
 fun mimeTypeFor(fileName: String): String {
     val ext = fileName.substringAfterLast('.', "").lowercase()

@@ -186,11 +186,10 @@ class TransferService : Service(), TransferManager.Listener {
 
     private fun verb(t: Transfer) = if (t.kind == TransferKind.UPLOAD) "Uploading" else "Downloading"
 
-    private fun icon(t: Transfer) = if (t.kind == TransferKind.UPLOAD) R.drawable.ic_upload else R.drawable.ic_download
-
     private fun progressNotification(t: Transfer): Notification {
         val b = NotificationCompat.Builder(this, CHANNEL_PROGRESS)
-            .setSmallIcon(icon(t))
+            .setSmallIcon(R.drawable.ic_stat_cat)
+            .setColor(getColor(R.color.accent))
             .setContentTitle("${verb(t)} ${t.title}")
             .setContentText(t.label.ifBlank { "Starting…" })
             .setContentIntent(openApp())
@@ -214,7 +213,8 @@ class TransferService : Service(), TransferManager.Listener {
         val ok = t.state == TransferState.SUCCESS
         val noun = if (t.kind == TransferKind.UPLOAD) "Upload" else "Download"
         return NotificationCompat.Builder(this, CHANNEL_DONE)
-            .setSmallIcon(icon(t))
+            .setSmallIcon(R.drawable.ic_stat_cat)
+            .setColor(getColor(R.color.accent))
             .setContentTitle(if (ok) "$noun complete" else "$noun failed")
             .setContentText(if (ok) t.message ?: t.title else "${t.title}: ${t.message ?: "error"}")
             .setStyle(NotificationCompat.BigTextStyle().bigText(if (ok) t.message ?: t.title else "${t.title}: ${t.message ?: "error"}"))
@@ -229,7 +229,8 @@ class TransferService : Service(), TransferManager.Listener {
 
     private fun placeholder(): Notification =
         NotificationCompat.Builder(this, CHANNEL_PROGRESS)
-            .setSmallIcon(R.drawable.ic_upload)
+            .setSmallIcon(R.drawable.ic_stat_cat)
+            .setColor(getColor(R.color.accent))
             .setContentTitle("Release Manager")
             .setSilent(true)
             .build()

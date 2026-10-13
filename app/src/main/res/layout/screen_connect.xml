@@ -8,47 +8,61 @@
     android:background="@color/bg"
     android:orientation="vertical">
 
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="56dp"
-        android:background="@drawable/bg_topbar"
-        android:gravity="center_vertical"
-        android:orientation="horizontal"
-        android:paddingStart="16dp"
-        android:paddingEnd="16dp">
-
-        <TextView
-            android:id="@+id/textTitle"
-            style="@style/App.TopbarTitle"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="@string/app_name" />
-    </LinearLayout>
-
     <ScrollView
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1">
+        android:layout_weight="1"
+        android:fillViewport="true">
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:gravity="center_horizontal"
             android:orientation="vertical"
-            android:padding="16dp">
+            android:paddingStart="20dp"
+            android:paddingTop="56dp"
+            android:paddingEnd="20dp"
+            android:paddingBottom="32dp">
+
+            <com.google.android.material.imageview.ShapeableImageView
+                android:layout_width="96dp"
+                android:layout_height="96dp"
+                android:contentDescription="@string/app_name"
+                android:elevation="4dp"
+                android:scaleType="centerCrop"
+                android:src="@drawable/logo_app"
+                app:shapeAppearanceOverlay="@style/ShapeAppearanceOverlay.App.Logo" />
+
+            <TextView
+                android:id="@+id/textTitle"
+                style="@style/App.HeroTitle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
+                android:text="@string/app_name" />
+
+            <TextView
+                style="@style/App.HeroSubtitle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"
+                android:layout_marginTop="8dp"
+                android:layout_marginEnd="12dp"
+                android:text="Browse repositories, edit files and manage releases straight from your phone." />
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:layout_marginTop="32dp"
                 android:background="@drawable/bg_card"
                 android:orientation="vertical"
-                android:padding="16dp">
+                android:padding="20dp">
 
                 <TextView
                     style="@style/App.FieldLabel"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginBottom="6dp"
+                    android:layout_marginBottom="8dp"
                     android:text="Personal Access Token" />
 
                 <com.google.android.material.textfield.TextInputLayout
@@ -56,14 +70,14 @@
                     style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    app:boxBackgroundColor="@color/surface"
-                    app:boxCornerRadiusBottomEnd="6dp"
-                    app:boxCornerRadiusBottomStart="6dp"
-                    app:boxCornerRadiusTopEnd="6dp"
-                    app:boxCornerRadiusTopStart="6dp"
+                    app:boxBackgroundColor="@color/bg"
+                    app:boxCornerRadiusBottomEnd="10dp"
+                    app:boxCornerRadiusBottomStart="10dp"
+                    app:boxCornerRadiusTopEnd="10dp"
+                    app:boxCornerRadiusTopStart="10dp"
                     app:boxStrokeColor="@color/box_stroke_selector"
                     app:boxStrokeWidth="1dp"
-                    app:boxStrokeWidthFocused="1dp"
+                    app:boxStrokeWidthFocused="1.5dp"
                     app:endIconMode="password_toggle"
                     app:endIconTint="@color/text_muted"
                     app:hintEnabled="false">
@@ -83,8 +97,8 @@
                     android:id="@+id/textConnectStatus"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:textSize="12sp"
+                    android:layout_marginTop="10dp"
+                    android:textSize="13sp"
                     android:visibility="gone" />
 
                 <com.google.android.material.button.MaterialButton
@@ -92,9 +106,20 @@
                     style="@style/Widget.App.Button"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="16dp"
+                    android:layout_marginTop="20dp"
                     android:text="Connect" />
             </LinearLayout>
+
+            <TextView
+                style="@style/App.HeroSubtitle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:layout_marginTop="16dp"
+                android:layout_marginEnd="8dp"
+                android:text="Create the token in GitHub › Settings › Developer settings, with access to the repositories you want to manage. It is stored encrypted on this device."
+                android:textColor="@color/text_dim"
+                android:textSize="12sp" />
         </LinearLayout>
     </ScrollView>
 </LinearLayout>

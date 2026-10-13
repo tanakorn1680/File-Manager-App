@@ -1,6 +1,7 @@
 package com.releasemanager.ui
 
 import android.net.Uri
+import android.os.Looper
 import android.provider.OpenableColumns
 import android.view.LayoutInflater
 import android.view.View
@@ -54,6 +55,7 @@ class UploadScreen(private val ctx: AppContext) {
     private val progressGroup: View = root.findViewById(R.id.progressGroup)
     private val label1: TextView = root.findViewById(R.id.textProgressLabel1)
     private val progress1: ProgressBar = root.findViewById(R.id.progress1)
+    private val percent1: TextView = root.findViewById(R.id.textProgressPercent)
     private val label2: TextView = root.findViewById(R.id.textProgressLabel2)
     private val progress2: ProgressBar = root.findViewById(R.id.progress2)
     private val commitWrap: View = root.findViewById(R.id.commitWrap)
@@ -96,7 +98,8 @@ class UploadScreen(private val ctx: AppContext) {
         commitWrap.visibility = View.GONE
         btnDoUpload.visibility = View.GONE
         progressGroup.visibility = View.GONE
-        progress1.progress = 0
+        setProgress(progress1, 0.0)
+        percent1.text = ""
         progress2.progress = 0
         btnDoUpload.text = if (zip) "Upload & Extract" else "Upload"
         inputCommitMsg.setText(if (zip) "Upload ZIP contents" else "Upload files")
@@ -194,7 +197,7 @@ class UploadScreen(private val ctx: AppContext) {
         uploading = true
         btnDoUpload.isEnabled = false
         root.hideKeyboard()
-        progress1.progress = 0
+        setProgress(progress1, 0.0)
         progress2.progress = 0
         progressGroup.visibility = View.VISIBLE
 
@@ -236,7 +239,7 @@ class UploadScreen(private val ctx: AppContext) {
         val dir = state.currentPath
         val cr = act.applicationContext.contentResolver
         val cacheDir = act.cacheDir
-        val files = picked.map { PickedSource(it.uri, it.name) }
+        val files = picked.map { PickedSource(it.uri, it.name, it.size) }
         val zip = mode == Mode.ZIP
         val message = inputCommitMsg.text.toString().ifEmpty { if (zip) "Upload ZIP contents" else "Upload files" }
 
@@ -261,7 +264,8 @@ class UploadScreen(private val ctx: AppContext) {
 
         if (t.isRunning) {
             if (t.label.isNotEmpty()) label1.text = t.label
-            if (t.fraction >= 0f) setProgress(progress1, t.fraction.toDouble())
+            // A known fraction is shown as such; otherwise the bar says "working" rather than showing a stale number
+            if (t.fraction >= 0f) setProgress(progress1, t.fraction.toDouble()) else setIndeterminate(progress1)
             if (t.itemIndex >= 0) {
                 val oneRow = summaryMode || mode == Mode.ZIP
                 setStatus(if (oneRow) 0 else t.itemIndex, if (oneRow) t.itemText else "Copying…", Kind.WORKING)
@@ -312,6 +316,11 @@ class UploadScreen(private val ctx: AppContext) {
         label2.visibility = View.GONE
         progress2.visibility = View.GONE
 
+        // Byte-accurate when every size is known (a single big file must not look like "0 % … 100 %")
+        val sizesKnown = files.all { it.size >= 0 } && files.sumOf { it.size } > 0
+        val totalBytes = files.sumOf { maxOf(it.size, 0L) }
+        var doneBytes = 0L
+
         var i = 0
         var doneUpTo = 0 // rows before this are staged
         try {
@@ -319,12 +328,17 @@ class UploadScreen(private val ctx: AppContext) {
                 val f = files[i]
                 setStatus(i, if (summaryMode) "Staging ${i + 1}/$total…" else "Staging…", Kind.WORKING)
                 val targetPath = if (dir.isNotEmpty()) "$dir/${f.name}" else f.name
-                val disk = withContext(Dispatchers.IO) { stageToDisk { openPicked(f) } }
+                val disk = withContext(Dispatchers.IO) {
+                    stageToDisk(open = { openPicked(f) }, onBytes = { n ->
+                        doneBytes += n
+                        if (sizesKnown) setProgress(progress1, doneBytes.toDouble() / totalBytes)
+                    })
+                }
                 state.stagedFiles[targetPath] = StagedFile(targetPath, f.name, null, "file", "upload", null, disk.absolutePath)
                 if (!summaryMode) setStatus(i, "Staged", Kind.DONE)
                 i++
                 if (summaryMode) setStatus(0, "$i/$total staged", Kind.WORKING)
-                setProgress(progress1, i.toDouble() / total)
+                setProgress(progress1, if (sizesKnown) doneBytes.toDouble() / totalBytes else i.toDouble() / total)
                 doneUpTo = i
             }
 
@@ -355,7 +369,7 @@ class UploadScreen(private val ctx: AppContext) {
 
         try {
             setStatus(0, "Reading ZIP…", Kind.WORKING)
-            setProgress(progress1, 0.05)
+            setIndeterminate(progress1)
 
             // ZipFile needs a real file, so the picked document is copied into the app cache first
             val copy = withContext(Dispatchers.IO) { copyToCache(pick) }
@@ -379,10 +393,18 @@ class UploadScreen(private val ctx: AppContext) {
                 if (tooBig != null) throw IOException(UploadJobs.tooLargeMessage(tooBig.name, tooBig.entry.size))
 
                 val total = targets.size
+                val zipTotalBytes = targets.sumOf { maxOf(it.entry.size, 0L) }
+                var zipDoneBytes = 0L
+                setProgress(progress1, 0.0)
                 for ((read, t) in targets.withIndex()) {
-                    val disk = withContext(Dispatchers.IO) { stageToDisk { zip.getInputStream(t.entry) } }
+                    val disk = withContext(Dispatchers.IO) {
+                        stageToDisk(open = { zip.getInputStream(t.entry) }, onBytes = { n ->
+                            zipDoneBytes += n
+                            if (zipTotalBytes > 0) setProgress(progress1, zipDoneBytes.toDouble() / zipTotalBytes)
+                        })
+                    }
                     state.stagedFiles[t.path] = StagedFile(t.path, t.name, null, "file", "upload", null, disk.absolutePath)
-                    setProgress(progress1, (read + 1).toDouble() / total)
+                    setProgress(progress1, if (zipTotalBytes > 0) zipDoneBytes.toDouble() / zipTotalBytes else (read + 1).toDouble() / total)
                     setStatus(0, "${read + 1}/$total staged", Kind.WORKING)
                 }
                 setProgress(progress1, 1.0)
@@ -414,11 +436,21 @@ class UploadScreen(private val ctx: AppContext) {
     // ── Reading ──────────────────────────────────────────────────────────────
 
     /** Copies [open]'s stream into the app cache (sequential disk I/O, nothing held in memory) and returns that file. */
-    private fun stageToDisk(open: () -> java.io.InputStream): File {
+    private fun stageToDisk(open: () -> java.io.InputStream, onBytes: ((Long) -> Unit)? = null): File {
         val dir = File(act.cacheDir, STAGED_DIR).apply { mkdirs() }
         val out = File(dir, "s${System.nanoTime()}")
         try {
-            open().use { input -> out.outputStream().use { input.copyTo(it, 64 * 1024) } }
+            open().use { input ->
+                out.outputStream().use { dst ->
+                    val buf = ByteArray(64 * 1024)
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        dst.write(buf, 0, n)
+                        onBytes?.invoke(n.toLong())
+                    }
+                }
+            }
         } catch (e: Throwable) {
             out.delete()
             throw e
@@ -464,8 +496,20 @@ class UploadScreen(private val ctx: AppContext) {
         )
     }
 
+    /** Safe from any thread (ProgressBar.setProgress and View.post both are). */
     private fun setProgress(bar: ProgressBar, fraction: Double) {
-        bar.progress = (fraction * 100).toInt().coerceIn(0, 100)
+        val pct = (fraction * 100).toInt().coerceIn(0, 100)
+        // Changing the mode touches the view's animation, so only from the main thread; the callers that run
+        // elsewhere (byte callbacks) start from a bar that was already put in determinate mode there.
+        if (bar.isIndeterminate && Looper.myLooper() == Looper.getMainLooper()) bar.isIndeterminate = false
+        bar.progress = pct
+        if (bar === progress1) percent1.post { percent1.text = "$pct%" }
+    }
+
+    /** Unknown length: the bar animates and no percentage is shown. */
+    private fun setIndeterminate(bar: ProgressBar) {
+        if (!bar.isIndeterminate) bar.isIndeterminate = true
+        if (bar === progress1) percent1.text = ""
     }
 
     /** Web: `setTimeout(() => { showScreen('files'); … }, 1200)` — but never yank the user back from elsewhere. */

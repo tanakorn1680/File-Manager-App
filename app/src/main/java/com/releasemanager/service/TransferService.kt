@@ -6,12 +6,15 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.content.pm.ServiceInfo
 import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import androidx.core.content.ContextCompat
 import com.releasemanager.R
 import com.releasemanager.ui.MainActivity
 import com.releasemanager.ui.userMessage
@@ -186,11 +189,26 @@ class TransferService : Service(), TransferManager.Listener {
 
     private fun verb(t: Transfer) = if (t.kind == TransferKind.UPLOAD) "Uploading" else "Downloading"
 
-    private fun icon(t: Transfer) = if (t.kind == TransferKind.UPLOAD) R.drawable.ic_upload else R.drawable.ic_download
+    /** The status-bar icon is the logo as a one-colour mask (the system tints it); Android needs it that way. */
+    @Suppress("UNUSED_PARAMETER")
+    private fun icon(t: Transfer) = R.drawable.ic_stat_logo
+
+    /** The logo in colour, shown large inside the expanded notification. Decoded once, at a size that is cheap to keep. */
+    private val largeIcon: Bitmap? by lazy {
+        try {
+            BitmapFactory.decodeResource(resources, R.drawable.logo_app)?.let { Bitmap.createScaledBitmap(it, 192, 192, true) }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun brandColor() = ContextCompat.getColor(this, R.color.brand_start)
 
     private fun progressNotification(t: Transfer): Notification {
         val b = NotificationCompat.Builder(this, CHANNEL_PROGRESS)
             .setSmallIcon(icon(t))
+            .setColor(brandColor())
+            .setLargeIcon(largeIcon)
             .setContentTitle("${verb(t)} ${t.title}")
             .setContentText(t.label.ifBlank { "Starting…" })
             .setContentIntent(openApp())
@@ -215,6 +233,8 @@ class TransferService : Service(), TransferManager.Listener {
         val noun = if (t.kind == TransferKind.UPLOAD) "Upload" else "Download"
         return NotificationCompat.Builder(this, CHANNEL_DONE)
             .setSmallIcon(icon(t))
+            .setColor(brandColor())
+            .setLargeIcon(largeIcon)
             .setContentTitle(if (ok) "$noun complete" else "$noun failed")
             .setContentText(if (ok) t.message ?: t.title else "${t.title}: ${t.message ?: "error"}")
             .setStyle(NotificationCompat.BigTextStyle().bigText(if (ok) t.message ?: t.title else "${t.title}: ${t.message ?: "error"}"))
@@ -229,7 +249,8 @@ class TransferService : Service(), TransferManager.Listener {
 
     private fun placeholder(): Notification =
         NotificationCompat.Builder(this, CHANNEL_PROGRESS)
-            .setSmallIcon(R.drawable.ic_upload)
+            .setSmallIcon(R.drawable.ic_stat_logo)
+            .setColor(brandColor())
             .setContentTitle("Release Manager")
             .setSilent(true)
             .build()

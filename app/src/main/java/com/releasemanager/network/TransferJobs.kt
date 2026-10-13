@@ -28,10 +28,10 @@ import java.util.zip.ZipOutputStream
  */
 
 /** A file the user picked for upload. */
-class PickedSource(val uri: Uri, val name: String)
+class PickedSource(val uri: Uri, val name: String, val size: Long = -1L)
 
 /** One file to put into the clone: [open] is called on a background thread. */
-class PushSource(val path: String, val open: () -> InputStream)
+class PushSource(val path: String, val size: Long = -1L, val open: () -> InputStream)
 
 /**
  * Document Uris from the system pickers are only readable while the Activity that received them is alive,
@@ -122,9 +122,15 @@ object ZipScan {
 
 // ── Uploads ──────────────────────────────────────────────────────────────────────────────────────
 
+/** Where each stage sits on the 0..1 bar of a push; JGit's own percentages restart for every task. */
+private const val PART_CLONE_END = 0.10f   // 0.00–0.10  clone: "Receiving objects"
+private const val PART_COPY_END = 0.20f    // 0.10–0.20  copying the files in, by bytes
+private const val PART_PUSH_START = 0.25f  // 0.20–0.25  commit, then 0.25–1.00 "Writing objects"
+
 /**
- * Clone → copy every source in → one commit → one push. Progress: 0–50 % copying, 50–100 % pushing;
- * the clone is shown as "unknown length".
+ * Clone → copy every source in → one commit → one push. The bar only ever moves forward, and shows
+ * "working" (unknown length) whenever there is no honest number — the clone before it starts receiving,
+ * and a push of only a few large objects, where git reports no progress inside an object.
  */
 suspend fun pushSources(
     api: GitHubApi,
@@ -136,17 +142,38 @@ suspend fun pushSources(
     progress: TransferProgress
 ) {
     val total = sources.size
+    val bytesKnown = total > 0 && sources.all { it.size >= 0 }
+    val totalBytes = if (bytesKnown) sources.sumOf { it.size } else 0L
+    var high = 0f
+    fun forward(fraction: Float, label: String) {
+        high = maxOf(high, fraction.coerceIn(0f, 1f))
+        progress.update(high, label)
+    }
+
     progress.update(-1f, "Cloning $repo…")
     val session = api.openGitSession(cacheDir, repo, branch) { phase, text, pct ->
-        if (phase == GitPhase.PUSH && pct >= 0) progress.update(0.5f + pct / 200f, text) else progress.label(text)
+        when {
+            phase == GitPhase.CLONE_DATA && pct >= 0 -> forward(PART_CLONE_END * pct / 100f, text)
+            phase == GitPhase.PUSH && pct >= 0 -> forward(PART_PUSH_START + (1f - PART_PUSH_START) * pct / 100f, text)
+            phase == GitPhase.PUSH -> progress.update(-1f, text)
+            else -> progress.label(text)
+        }
     }
     try {
+        var copied = 0L
         for ((i, src) in sources.withIndex()) {
             progress.item(i, "Copying ${i + 1}/$total…")
-            progress.update(i.toFloat() / total * 0.5f, "Copying ${i + 1}/$total…")
-            session.addFile(src.path, src.open)
+            session.addFile(src.path, onBytes = { n ->
+                copied += n
+                val share = if (bytesKnown && totalBytes > 0) copied.toFloat() / totalBytes else i.toFloat() / total
+                val detail = if (bytesKnown && totalBytes > 0) " — ${formatSize(copied)} / ${formatSize(totalBytes)}" else ""
+                forward(PART_CLONE_END + (PART_COPY_END - PART_CLONE_END) * share, "Copying ${i + 1}/$total$detail")
+            }, open = src.open)
+            if (!(bytesKnown && totalBytes > 0)) {
+                forward(PART_CLONE_END + (PART_COPY_END - PART_CLONE_END) * (i + 1) / total, "Copying ${i + 1}/$total…")
+            }
         }
-        progress.update(0.5f, "Preparing commit…")
+        forward(PART_COPY_END, "Preparing commit…")
         session.commitAndPush(message)
         progress.update(1f, "Done")
     } finally {
@@ -177,7 +204,7 @@ object UploadJobs {
     ): TransferOutcome {
         try {
             val sources = files.map { f ->
-                PushSource(if (dir.isNotEmpty()) "$dir/${f.name}" else f.name) {
+                PushSource(if (dir.isNotEmpty()) "$dir/${f.name}" else f.name, f.size) {
                     cr.openInputStream(f.uri) ?: throw IOException("Could not read \"${f.name}\"")
                 }
             }
@@ -221,7 +248,7 @@ object UploadJobs {
                 val tooBig = targets.firstOrNull { it.entry.size > GITHUB_MAX_FILE_BYTES }
                 if (tooBig != null) throw IOException(tooLargeMessage(tooBig.name, tooBig.entry.size))
 
-                val sources = targets.map { t -> PushSource(t.path) { zip.getInputStream(t.entry) } }
+                val sources = targets.map { t -> PushSource(t.path, t.entry.size) { zip.getInputStream(t.entry) } }
                 pushSources(api, cacheDir, repo, branch, message, sources, progress)
 
                 val skipped = listOfNotNull(

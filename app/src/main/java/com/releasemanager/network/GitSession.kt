@@ -6,6 +6,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import org.eclipse.jgit.api.Git
 import org.eclipse.jgit.api.errors.CanceledException
@@ -20,7 +21,11 @@ import org.eclipse.jgit.util.FS
 import java.io.File
 import java.io.InputStream
 
-enum class GitPhase { CLONE, PUSH, OTHER }
+/**
+ * CLONE_DATA = the clone's "Receiving objects", PACK = the local counting / compressing before a push,
+ * PUSH = "Writing objects" (the part that really goes over the network); CLONE / OTHER = anything else.
+ */
+enum class GitPhase { CLONE, CLONE_DATA, PACK, PUSH, OTHER }
 
 /**
  * Uploads into a repository the way `git clone` + `git add` + `git commit` + `git push` does in Termux:
@@ -43,10 +48,26 @@ class GitSession private constructor(
     private val paths = ArrayList<String>()
 
     /** Copies one file into the working copy; [open] is called on a background thread. */
-    suspend fun addFile(path: String, open: () -> InputStream) = withContext(Dispatchers.IO) {
+    suspend fun addFile(
+        path: String,
+        onBytes: ((Long) -> Unit)? = null,
+        open: () -> InputStream
+    ) = withContext(Dispatchers.IO) {
         try {
             val target = targetFor(path)
-            open().use { src -> target.outputStream().use { src.copyTo(it, 64 * 1024) } }
+            val job = currentCoroutineContext()[Job]
+            open().use { src ->
+                target.outputStream().use { dst ->
+                    val buf = ByteArray(64 * 1024)
+                    while (true) {
+                        job?.ensureActive()
+                        val n = src.read(buf)
+                        if (n < 0) break
+                        dst.write(buf, 0, n)
+                        onBytes?.invoke(n.toLong())
+                    }
+                }
+            }
             paths.add(path)
         } catch (e: Throwable) {
             throw friendly(e)
@@ -141,24 +162,37 @@ class GitSession private constructor(
         private val report: (GitPhase, String, Int) -> Unit
     ) : BatchingProgressMonitor() {
 
-        override fun onUpdate(taskName: String, workCurr: Int) = emit(taskName, -1)
+        override fun onUpdate(taskName: String, workCurr: Int) = emit(taskName, -1, -1)
 
-        override fun onEndTask(taskName: String, workCurr: Int) = emit(taskName, -1)
+        override fun onEndTask(taskName: String, workCurr: Int) = emit(taskName, -1, -1)
 
         override fun onUpdate(taskName: String, workCurr: Int, workTotal: Int, percentDone: Int) =
-            emit(taskName, percentDone)
+            emit(taskName, percentDone, workTotal)
 
         override fun onEndTask(taskName: String, workCurr: Int, workTotal: Int, percentDone: Int) =
-            emit(taskName, percentDone)
+            emit(taskName, percentDone, workTotal)
 
         override fun isCancelled(): Boolean = job?.isActive == false
 
-        private fun emit(title: String, pct: Int) {
-            report(phase, if (pct >= 0) "$label — $title $pct%" else "$label — $title…", pct)
+        /** JGit starts every task (counting, compressing, writing…) from 0 % again, so the task decides where it belongs. */
+        private fun emit(task: String, pct: Int, workTotal: Int) {
+            val sub = when {
+                phase == GitPhase.CLONE && task.contains("Receiving", ignoreCase = true) -> GitPhase.CLONE_DATA
+                phase == GitPhase.PUSH && task.contains("Writing", ignoreCase = true) -> GitPhase.PUSH
+                phase == GitPhase.PUSH -> GitPhase.PACK
+                else -> phase
+            }
+            // "Writing objects" counts OBJECTS, not bytes: a few big files are only a handful of objects, so the
+            // percentage would sit still and then jump. It is only trusted when there are enough objects.
+            val shown = if (sub == GitPhase.PUSH && workTotal < MIN_OBJECTS_FOR_PERCENT) -1 else pct
+            report(sub, if (pct >= 0) "$label — $task $pct%" else "$label — $task…", shown)
         }
     }
 
     companion object {
+        /** Fewer objects than this: the push progress is shown as "working" rather than a made-up percentage. */
+        private const val MIN_OBJECTS_FOR_PERCENT = 20
+
         private var configured = false
 
         private fun credentials(token: String) = UsernamePasswordCredentialsProvider("x-access-token", token)

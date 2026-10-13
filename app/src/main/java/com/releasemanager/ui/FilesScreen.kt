@@ -798,7 +798,7 @@ class FilesScreen(private val ctx: AppContext) {
                     // One clone, one commit, one push for all staged files (like Termux)
                     val sources = toUpsert.map { sf ->
                         val disk = sf.diskPath
-                        PushSource(sf.path) {
+                        PushSource(sf.path, if (disk != null) File(disk).length() else sf.content.orEmpty().length * 3L / 4) {
                             if (disk != null) File(disk).inputStream()
                             else ByteArrayInputStream(Base64.decode(sf.content.orEmpty(), Base64.DEFAULT))
                         }

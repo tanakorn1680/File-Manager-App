@@ -1,44 +1,45 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Brand: deep ink-navy surfaces, one blue accent, and the logo's blue→cyan gradient -->
-    <color name="bg">#0A0E17</color>
-    <color name="surface">#101626</color>
-    <color name="surface_hover">#172036</color>
-    <color name="border">#222B40</color>
-    <color name="text_primary">#E9EEF8</color>
-    <color name="text_muted">#96A3BC</color>
-    <color name="text_dim">#7683A0</color>
-    <color name="accent">#7C9BFF</color>
-    <color name="success">#3DDC97</color>
-    <color name="success_emphasis">#0B7F55</color>
-    <color name="danger">#FF6B73</color>
-    <color name="warning">#F2B134</color>
+    <!-- GitHub-dark palette: neutral gray surfaces, light-gray highlight, green for primary actions / success -->
+    <color name="bg">#0D1117</color>
+    <color name="surface">#161B22</color>
+    <color name="surface_hover">#1C2128</color>
+    <color name="border">#30363D</color>
+    <color name="text_primary">#E6EDF3</color>
+    <color name="text_muted">#9198A1</color>
+    <color name="text_dim">#7D8590</color>
+    <color name="accent">#C9D1D9</color>
+    <color name="success">#3FB950</color>
+    <color name="success_emphasis">#238636</color>
+    <color name="danger">#F85149</color>
+    <color name="warning">#D29922</color>
     <color name="white">#FFFFFF</color>
     <color name="black">#000000</color>
 
-    <!-- Logo gradient (also the adaptive-icon background) -->
-    <color name="brand_start">#3D5AFE</color>
-    <color name="brand_end">#0FB5C9</color>
+    <!-- Green pair: progress-bar fill and the notification accent -->
+    <color name="brand_start">#238636</color>
+    <color name="brand_end">#3FB950</color>
 
     <!-- 15 % tints of accent / danger / success / warning (Android #AARRGGBB, alpha 0x26) -->
-    <color name="accent_light">#267C9BFF</color>
-    <color name="danger_light">#26FF6B73</color>
-    <color name="success_light">#263DDC97</color>
-    <color name="warning_light">#26F2B134</color>
+    <color name="accent_light">#26C9D1D9</color>
+    <color name="danger_light">#26F85149</color>
+    <color name="success_light">#263FB950</color>
+    <color name="warning_light">#26D29922</color>
 
-    <color name="accent_pressed">#2A40D0</color>
-    <color name="warning_text">#F7C95C</color>
-    <color name="warning_pressed">#3A2F12</color>
-    <color name="badge_private_bg">#26FF6B73</color>
-    <color name="file_icon">#7B88A3</color>
-    <color name="toast_bg">#1B2438</color>
+    <!-- Ripple on the green filled buttons -->
+    <color name="accent_pressed">#2EA043</color>
+    <color name="warning_text">#E3B341</color>
+    <color name="warning_pressed">#3D2E00</color>
+    <color name="badge_private_bg">#26F85149</color>
+    <color name="file_icon">#7D8590</color>
+    <color name="toast_bg">#21262D</color>
     <color name="scrim">#80000000</color>
     <color name="transparent">#00000000</color>
 
-    <!-- Filled controls: white text on these meets 4.5:1 -->
-    <color name="accent_emphasis">#3D5AFE</color>
-    <color name="danger_emphasis">#D63447</color>
-    <color name="success_emphasis_pressed">#086642</color>
-    <color name="logo_bg">#0B1230</color>
-    <color name="border_strong">#34405C</color>
+    <!-- Filled controls (primary button, FAB, selected check, switch on): white text on these meets 4.5:1 -->
+    <color name="accent_emphasis">#238636</color>
+    <color name="danger_emphasis">#DA3633</color>
+    <color name="success_emphasis_pressed">#196C2E</color>
+    <color name="logo_bg">#161B22</color>
+    <color name="border_strong">#484F58</color>
 </resources>

@@ -143,7 +143,7 @@
                         style="?android:attr/progressBarStyleHorizontal"
                         android:layout_width="match_parent"
                         android:layout_height="6dp"
-                        android:indeterminateTint="@color/accent"
+                        android:indeterminateTint="@color/brand_end"
                         android:indeterminateTintMode="src_in"
                         android:max="100"
                         android:progressDrawable="@drawable/progress_bar" />

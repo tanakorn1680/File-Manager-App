@@ -2,9 +2,14 @@ package com.releasemanager.ui
 
 import android.text.SpannableStringBuilder
 import android.text.Spanned
+import android.text.method.KeyListener
 import android.text.style.StyleSpan
 import android.graphics.Typeface
+import android.os.Handler
+import android.os.Looper
 import android.util.Base64
+import android.util.TypedValue
+import android.view.ScaleGestureDetector
 import android.view.View
 import android.widget.EditText
 import android.widget.ImageButton
@@ -19,6 +24,12 @@ import kotlinx.coroutines.Job
 /**
  * Web: #screen-editor. Quick Edit commits the file straight away ("Commit"); Stage Mode keeps the
  * edit in the queue ("Stage") and returns to the file list.
+ *
+ * Everything here runs against the in-memory text that came straight from the GitHub API — there is
+ * never a local copy to download: Commit / Stage both send this same buffer back over the API. On
+ * top of that, the field behaves like a small code editor: line numbers kept in sync with its own
+ * scroll, pinch-to-zoom, a word-wrap toggle, a read-only (view only, still scrollable) toggle, find
+ * and jump-to-line, and lightweight syntax colouring by file extension (see SyntaxHighlighter).
  */
 class EditorScreen(private val ctx: AppContext) {
 
@@ -29,7 +40,9 @@ class EditorScreen(private val ctx: AppContext) {
     private val dirtyDot: View = root.findViewById(R.id.viewDirtyDot)
     private val btnStage: TextView = root.findViewById(R.id.btnStage)
     private val btnCommit: MaterialButton = root.findViewById(R.id.btnCommit)
+    private val btnMenu: ImageButton = root.findViewById(R.id.btnEditorMenu)
     private val editorText: EditText = root.findViewById(R.id.editorText)
+    private val lineNumbers: TextView = root.findViewById(R.id.editorLineNumbers)
 
     private var loadJob: Job? = null
 
@@ -40,13 +53,49 @@ class EditorScreen(private val ctx: AppContext) {
     /** Set while the code (not the user) fills the text field, so it is not counted as an edit. */
     private var programmaticChange = false
 
+    // ── Editor UX state (persists across files for the rest of the session) ───
+    private val defaultKeyListener: KeyListener? = editorText.keyListener
+    private var wrapEnabled = true
+    private var manualReadOnly = false
+    private var lastSearch = ""
+    private var language = SyntaxHighlighter.Lang.NONE
+
+    private val minTextSizeSp = 10f
+    private val maxTextSizeSp = 26f
+    private val defaultTextSizeSp = 14f
+    private var textSizeSp = defaultTextSizeSp
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var pendingUpdate: Runnable? = null
+
+    private val scaleDetector = ScaleGestureDetector(act, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+        override fun onScale(detector: ScaleGestureDetector): Boolean {
+            setTextSize((textSizeSp * detector.scaleFactor).coerceIn(minTextSizeSp, maxTextSizeSp))
+            return true
+        }
+    })
+
     init {
         root.findViewById<ImageButton>(R.id.btnBack).setOnClickListener { onBack() }
         btnStage.setOnClickListener { stageCurrentFile() }
         btnCommit.setOnClickListener { openCommitDialog(null) }
+        btnMenu.setOnClickListener { openEditorMenu() }
         editorText.onTextChanged {
             if (!programmaticChange) {
                 setDirty(editorText.text.toString() != state.editorOriginal)
+                scheduleContentUpdate()
+            }
+        }
+        // Pinch-to-zoom: the detector only observes the stream (it never consumes it), so normal
+        // typing, caret placement, selection and the field's own touch-scrolling all keep working.
+        editorText.setOnTouchListener { _, event ->
+            scaleDetector.onTouchEvent(event)
+            false
+        }
+        editorText.setOnScrollChangeListener { _, _, scrollY, _, _ -> lineNumbers.scrollTo(0, scrollY) }
+        editorText.addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
+            if (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) {
+                editorText.post { recomputeLineNumbers() }
             }
         }
     }
@@ -59,6 +108,7 @@ class EditorScreen(private val ctx: AppContext) {
         state.editingFile = file
         state.editorOriginal = ""
         loaded = false
+        language = SyntaxHighlighter.languageFor(file.name)
         setDirty(false)
         textTitle.text = file.name
         setEditorText("Loading…")
@@ -111,6 +161,12 @@ class EditorScreen(private val ctx: AppContext) {
         setDirty(false)
         loaded = true
         updateControls()
+        applyWrapMode()
+        setTextSize(textSizeSp, force = true)
+        editorText.post {
+            applyHighlight()
+            recomputeLineNumbers()
+        }
     }
 
     private fun setEditorText(text: String) {
@@ -124,12 +180,18 @@ class EditorScreen(private val ctx: AppContext) {
         dirtyDot.visibility = if (dirty) View.VISIBLE else View.GONE
     }
 
-    /** The field is locked and Commit / Stage disabled until the real content has loaded. */
+    /**
+     * The field is locked (via the key listener, not isEnabled) and Commit / Stage disabled until
+     * the real content has loaded, or while "Read-only mode" is on. Using the key listener rather
+     * than isEnabled keeps scrolling and text selection/copy working in both cases.
+     */
     private fun updateControls() {
-        editorText.isEnabled = loaded
+        editorText.keyListener = if (loaded && !manualReadOnly) defaultKeyListener else null
         btnCommit.isEnabled = loaded && !saving
         btnStage.isEnabled = loaded
         btnStage.alpha = if (loaded) 1f else 0.4f
+        btnMenu.isEnabled = loaded
+        btnMenu.alpha = if (loaded) 1f else 0.4f
     }
 
     // ── Back ─────────────────────────────────────────────────────────────────
@@ -244,6 +306,200 @@ class EditorScreen(private val ctx: AppContext) {
             } finally {
                 saving = false
                 updateControls()
+            }
+        }
+    }
+
+    // ── Line numbers ─────────────────────────────────────────────────────────
+
+    /**
+     * Rebuilds the gutter from editorText's own Layout so wrapped (soft-broken) rows get a blank
+     * cell instead of a wrong number — a visual row only gets a number when it is the first row of
+     * its logical (newline-delimited) line.
+     */
+    private fun recomputeLineNumbers() {
+        val layout = editorText.layout ?: return
+        val text = editorText.text ?: return
+        val visualLines = layout.lineCount
+        if (visualLines > 20_000) return // guard against pathological files; gutter just stays as-is
+
+        val sb = StringBuilder()
+        var logicalNo = 0
+        for (i in 0 until visualLines) {
+            val start = layout.getLineStart(i)
+            val isNewLogicalLine = start == 0 || text[start - 1] == '\n'
+            if (isNewLogicalLine) sb.append(++logicalNo)
+            if (i != visualLines - 1) sb.append('\n')
+        }
+        lineNumbers.text = sb
+        lineNumbers.scrollTo(0, editorText.scrollY)
+    }
+
+    // ── Debounced highlight + gutter refresh while typing ──────────────────────
+
+    private fun scheduleContentUpdate() {
+        pendingUpdate?.let { mainHandler.removeCallbacks(it) }
+        val r = Runnable {
+            applyHighlight()
+            recomputeLineNumbers()
+        }
+        pendingUpdate = r
+        mainHandler.postDelayed(r, 150)
+    }
+
+    private fun applyHighlight() {
+        val editable = editorText.text ?: return
+        SyntaxHighlighter.highlight(editable, language, ::colorFor)
+    }
+
+    private fun colorFor(category: String): Int = when (category) {
+        "comment" -> act.color(R.color.text_dim)
+        "string" -> act.color(R.color.success)
+        "number" -> act.color(R.color.warning_text)
+        "keyword", "tag" -> act.color(R.color.accent)
+        "attr" -> act.color(R.color.warning)
+        else -> act.color(R.color.text_primary)
+    }
+
+    // ── Zoom ─────────────────────────────────────────────────────────────────
+
+    private fun setTextSize(sp: Float, force: Boolean = false) {
+        val clamped = sp.coerceIn(minTextSizeSp, maxTextSizeSp)
+        if (!force && clamped == textSizeSp) return
+        textSizeSp = clamped
+        editorText.setTextSize(TypedValue.COMPLEX_UNIT_SP, textSizeSp)
+        lineNumbers.setTextSize(TypedValue.COMPLEX_UNIT_SP, textSizeSp)
+        editorText.post { recomputeLineNumbers() }
+    }
+
+    private fun resetZoom() = setTextSize(defaultTextSizeSp, force = true)
+
+    // ── Word wrap ────────────────────────────────────────────────────────────
+
+    private fun applyWrapMode() {
+        // Built-in TextView behaviour: horizontally-scrolling + multiline == no wrap, independent
+        // vertical AND horizontal touch scrolling, no extra ScrollView needed.
+        editorText.setHorizontallyScrolling(!wrapEnabled)
+        editorText.post { recomputeLineNumbers() }
+    }
+
+    private fun toggleWrap() {
+        wrapEnabled = !wrapEnabled
+        applyWrapMode()
+    }
+
+    // ── Read-only (view only, still scrollable/selectable) ─────────────────────
+
+    private fun toggleReadOnly() {
+        manualReadOnly = !manualReadOnly
+        updateControls()
+    }
+
+    // ── Overflow menu ────────────────────────────────────────────────────────
+
+    private fun openEditorMenu() {
+        if (!loaded) return
+        val wrapLabel = (if (wrapEnabled) "✓ " else "") + "Word wrap"
+        val readOnlyLabel = (if (manualReadOnly) "✓ " else "") + "Read-only mode"
+        Dialogs.sheet(
+            act, state.editingFile?.name ?: "Editor",
+            listOf(
+                Dialogs.SheetItem("Find in file", R.drawable.ic_search, onClick = { openFindDialog() }),
+                Dialogs.SheetItem("Jump to line", R.drawable.ic_arrow_right, onClick = { openJumpToLineDialog() }),
+                Dialogs.SheetItem(
+                    wrapLabel, R.drawable.ic_check_square,
+                    sub = "Wrap long lines instead of scrolling sideways",
+                    separatorBefore = true,
+                    onClick = { toggleWrap() }
+                ),
+                Dialogs.SheetItem(
+                    readOnlyLabel, R.drawable.ic_eye,
+                    sub = "Browse safely — scrolling and selection still work",
+                    onClick = { toggleReadOnly() }
+                ),
+                Dialogs.SheetItem(
+                    "Reset zoom", R.drawable.ic_refresh,
+                    sub = "Pinch the text to resize it",
+                    separatorBefore = true,
+                    onClick = { resetZoom() }
+                )
+            )
+        )
+    }
+
+    // ── Find ─────────────────────────────────────────────────────────────────
+
+    private fun openFindDialog() {
+        if (!loaded) return
+        Dialogs.prompt(
+            act, title = "Find in file", label = "Text to find",
+            initial = lastSearch, positive = "Find", allowEmpty = false
+        ) { query ->
+            lastSearch = query
+            findNext(query)
+        }
+    }
+
+    private fun findNext(query: String) {
+        val text = editorText.text?.toString().orEmpty()
+        if (query.isEmpty() || text.isEmpty()) return
+        val from = editorText.selectionEnd.coerceIn(0, text.length)
+        var idx = text.indexOf(query, from, ignoreCase = true)
+        var wrapped = false
+        if (idx < 0) {
+            idx = text.indexOf(query, 0, ignoreCase = true)
+            wrapped = true
+        }
+        if (idx < 0) {
+            ctx.toast.show("\"$query\" not found")
+            return
+        }
+        selectAndReveal(idx, idx + query.length)
+        if (wrapped) ctx.toast.show("Reached the end — continuing from the top")
+    }
+
+    // ── Jump to line ─────────────────────────────────────────────────────────
+
+    private fun openJumpToLineDialog() {
+        if (!loaded) return
+        Dialogs.prompt(
+            act, title = "Jump to line", label = "Line number",
+            hint = "1–${currentLineCount()}", positive = "Go", allowEmpty = false
+        ) { value ->
+            val n = value.trim().toIntOrNull()
+            if (n != null && n > 0) jumpToLine(n) else ctx.toast.show("Enter a line number")
+        }
+    }
+
+    private fun currentLineCount(): Int = editorText.text?.count { it == '\n' }?.plus(1) ?: 1
+
+    private fun jumpToLine(n: Int) {
+        val text = editorText.text?.toString() ?: return
+        var idx = 0
+        var line = 1
+        while (line < n) {
+            val next = text.indexOf('\n', idx)
+            if (next < 0) break
+            idx = next + 1
+            line++
+        }
+        selectAndReveal(idx, idx)
+    }
+
+    // ── Shared: move the caret/selection and scroll it into view ───────────────
+
+    private fun selectAndReveal(start: Int, end: Int) {
+        val len = editorText.text?.length ?: 0
+        val s = start.coerceIn(0, len)
+        val e = end.coerceIn(s, len)
+        editorText.requestFocus()
+        editorText.setSelection(s, e)
+        editorText.post {
+            editorText.layout?.let { layout ->
+                val line = layout.getLineForOffset(s)
+                val y = layout.getLineTop(line)
+                editorText.scrollTo(editorText.scrollX, (y - editorText.height / 3).coerceAtLeast(0))
+                lineNumbers.scrollTo(0, editorText.scrollY)
             }
         }
     }

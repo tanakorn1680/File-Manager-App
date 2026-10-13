@@ -1,8 +1,11 @@
 package com.releasemanager.ui
 
+import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.OpenableColumns
 import android.view.View
@@ -11,6 +14,7 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -20,13 +24,14 @@ import com.releasemanager.data.GitHubApiException
 import com.releasemanager.data.ReleaseAsset
 import com.releasemanager.data.TokenStore
 import com.releasemanager.network.GitHubApi
+import com.releasemanager.network.UploadJobs
+import com.releasemanager.network.UriAccess
+import com.releasemanager.service.Transfer
+import com.releasemanager.service.TransferKind
+import com.releasemanager.service.TransferManager
+import com.releasemanager.service.TransferState
 import com.releasemanager.util.formatSize
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.io.File
-import java.io.FileOutputStream
 
 class ReleaseDetailActivity : AppCompatActivity() {
 
@@ -45,13 +50,24 @@ class ReleaseDetailActivity : AppCompatActivity() {
     private lateinit var appToast: AppToast
 
     private lateinit var assetAdapter: AssetAdapter
-    private var uploadJob: Job? = null
 
+    /**
+     * The upload runs in TransferService (background, progress in the notification), so it carries on when this
+     * screen is left or the app is closed. This is the one this screen is showing, if any.
+     */
+    private var uploadTransfer: Transfer? = null
+    private val transferListener = TransferManager.Listener { t -> onTransferUpdate(t) }
+
+    // OpenDocument rather than GetContent: only its Uri can be kept readable after the app is closed
     private val pickFileLauncher = registerForActivityResult(
-        ActivityResultContracts.GetContent()
+        ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         if (uri != null) startUpload(uri)
     }
+
+    private val notifPermLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -100,12 +116,29 @@ class ReleaseDetailActivity : AppCompatActivity() {
         recyclerAssets.layoutManager = LinearLayoutManager(this)
         recyclerAssets.adapter = assetAdapter
 
-        dropZone.setOnClickListener { pickFileLauncher.launch("*/*") }
+        dropZone.setOnClickListener { pickFileLauncher.launch(arrayOf("*/*")) }
         btnCancelUpload.setOnClickListener { cancelUpload() }
         btnDeleteRelease.setOnClickListener { confirmDeleteRelease() }
 
         loadAssets()
+
+        // Back on a release whose upload is still running in the background: show its progress again
+        TransferManager.addListener(transferListener)
+        TransferManager.find(uploadTag())?.let { t ->
+            uploadTransfer = t
+            dropZone.visibility = View.GONE
+            uploadProgressGroup.visibility = View.VISIBLE
+            showProgress(t)
+        }
     }
+
+    override fun onDestroy() {
+        // The upload itself belongs to TransferService and is not affected
+        TransferManager.removeListener(transferListener)
+        super.onDestroy()
+    }
+
+    private fun uploadTag() = "release:$repo:$releaseId"
 
     private fun loadAssets() {
         lifecycleScope.launch {
@@ -124,9 +157,13 @@ class ReleaseDetailActivity : AppCompatActivity() {
     // ── Upload ───────────────────────────────────────────────────────────
 
     private fun startUpload(uri: Uri) {
+        // Keep the Uri readable after the app is closed; the background upload gives it back when done
+        UriAccess.persist(contentResolver, uri, write = false)
+
         val fileName = queryFileName(uri) ?: "upload_${System.currentTimeMillis()}"
         val size = queryFileSize(uri)
         if (size >= RELEASE_ASSET_LIMIT_BYTES) {
+            UriAccess.release(contentResolver, uri)
             appToast.error("\"$fileName\" is ${formatSize(size)} — GitHub accepts release files under 2 GiB.", 8000)
             return
         }
@@ -139,70 +176,61 @@ class ReleaseDetailActivity : AppCompatActivity() {
         progressUpload.progress = 0
         textUploadLabel.text = "Preparing $fileName…"
 
-        uploadJob = lifecycleScope.launch {
-            var tempFile: File? = null
-            try {
-                // GitHub's upload endpoint needs the exact length up front. When the file provider reports it,
-                // the bytes are streamed straight from the picked file (nothing copied, nothing held in memory);
-                // only when it does not is the file copied into the app cache first.
-                val onProgress: (Long, Long) -> Unit = { sent, total ->
-                    runOnUiThread {
-                        val pct = if (total > 0) ((sent * 100) / total).toInt() else 0
-                        progressUpload.progress = pct
-                        textUploadLabel.text = "Uploading $fileName… ${formatSize(sent)} / ${formatSize(total)}"
-                    }
-                }
-                val asset = if (size > 0) {
-                    // Size is known: stream straight from the picked file, no copy into app storage
-                    textUploadLabel.text = "Uploading $fileName…"
-                    api.uploadAssetStream(
-                        repo, releaseId, fileName, mimeType, size,
-                        { contentResolver.openInputStream(uri) ?: throw java.io.IOException("Could not open selected file") },
-                        onProgress
-                    )
-                } else {
-                    // The provider did not report a size (GitHub needs the exact length): copy first, then upload
-                    textUploadLabel.text = "Copying $fileName into app storage…"
-                    val copy = withContext(Dispatchers.IO) { copyUriToCacheFile(uri, fileName) }
-                    tempFile = copy
-                    textUploadLabel.text = "Uploading $fileName…"
-                    api.uploadAsset(repo, releaseId, copy, mimeType, onProgress, fileName)
-                }
+        requestNotificationPermission()
 
-                assetAdapter.addItem(asset)
-                textEmptyAssets.visibility = View.GONE
+        // Plain copies of what the background work needs: it must not reach into this Activity
+        val apiRef = api
+        val repoRef = repo
+        val releaseIdRef = releaseId
+        val cr = applicationContext.contentResolver
+        val cache = cacheDir
+
+        // GitHub's upload endpoint needs the exact length up front. When the file provider reports it, the bytes
+        // are streamed straight from the picked file (nothing copied, nothing held in memory); only when it does
+        // not is the file copied into the app cache first.
+        uploadTransfer = TransferManager.start(this, TransferKind.UPLOAD, fileName, uploadTag()) { progress ->
+            UploadJobs.releaseAsset(apiRef, cr, cache, repoRef, releaseIdRef, uri, fileName, mimeType, size, progress)
+        }
+    }
+
+    private fun showProgress(t: Transfer) {
+        textUploadLabel.text = if (t.label.isBlank()) "Uploading ${t.title}…" else "${t.title}: ${t.label}"
+        if (t.fraction >= 0f) progressUpload.progress = (t.fraction * 100).toInt().coerceIn(0, 100)
+    }
+
+    /** Progress and the final result of the background upload, while this screen is open. */
+    private fun onTransferUpdate(t: Transfer) {
+        if (t.id != uploadTransfer?.id) return
+        if (t.isRunning) {
+            showProgress(t)
+            return
+        }
+
+        uploadTransfer = null
+        dropZone.visibility = View.VISIBLE
+        uploadProgressGroup.visibility = View.GONE
+        when (t.state) {
+            TransferState.SUCCESS -> {
+                (t.result as? ReleaseAsset)?.let { asset ->
+                    assetAdapter.addItem(asset)
+                    textEmptyAssets.visibility = View.GONE
+                }
                 appToast.success("Uploaded")
-            } catch (e: GitHubApiException) {
-                appToast.error("Upload failed: ${e.message}", 5000)
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                appToast.show("Upload cancelled")
-            } catch (e: Exception) {
-                appToast.error("Upload failed: ${e.message}", 5000)
-            } finally {
-                tempFile?.delete()
-                dropZone.visibility = View.VISIBLE
-                uploadProgressGroup.visibility = View.GONE
-                uploadJob = null
             }
+            TransferState.CANCELLED -> appToast.show("Upload cancelled")
+            else -> appToast.error("Upload failed: ${t.message}", 5000)
         }
     }
 
     private fun cancelUpload() {
-        uploadJob?.cancel()
+        uploadTransfer?.let { TransferManager.cancel(it.id) }
     }
 
-    private fun copyUriToCacheFile(uri: Uri, fileName: String): File {
-        val outFile = File(cacheDir, "upload_${System.currentTimeMillis()}_$fileName")
-        contentResolver.openInputStream(uri)?.use { input ->
-            FileOutputStream(outFile).use { output ->
-                val buffer = ByteArray(8 * 1024)
-                var bytesRead: Int
-                while (input.read(buffer).also { bytesRead = it } != -1) {
-                    output.write(buffer, 0, bytesRead)
-                }
-            }
-        } ?: throw java.io.IOException("Could not open selected file")
-        return outFile
+    /** Android 13+: without this permission the progress notification of a background upload is not shown. */
+    private fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT < 33) return
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
+        notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 
     /** Exact size in bytes as the file provider reports it, or -1 when it does not. */

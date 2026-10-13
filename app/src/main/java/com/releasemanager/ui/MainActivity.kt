@@ -1,9 +1,12 @@
 package com.releasemanager.ui
 
+import android.Manifest
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.widget.TextView
@@ -11,9 +14,11 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContract
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import com.releasemanager.R
 import com.releasemanager.data.AppState
 import com.releasemanager.data.TokenStore
+import com.releasemanager.network.UriAccess
 
 /**
  * Single-activity host. Every web `.screen` is an <include>d layout in activity_main.xml with its
@@ -70,15 +75,34 @@ class MainActivity : AppCompatActivity() {
         callback?.invoke(uri)
     }
 
+    private val notifPermLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
+    /** Android 13+: without this permission the progress notification of a background transfer is not shown. */
+    fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT < 33) return
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
+        notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+
+    // The Uris the pickers return are only readable while this Activity lives, unless a persistable grant is
+    // taken — and a transfer must keep reading/writing after the app was closed, so every picked Uri gets one
+    // here (the transfer gives it back when it ends).
+
     /** Upload Files: any files, several at once. */
     fun pickFiles(onResult: (List<Uri>) -> Unit) {
-        pickFilesCallback = onResult
+        pickFilesCallback = { uris ->
+            uris.forEach { UriAccess.persist(contentResolver, it, write = false) }
+            onResult(uris)
+        }
         pickFilesLauncher.launch(arrayOf("*/*"))
     }
 
     /** Upload ZIP: one document (some providers label ZIPs as octet-stream, so that is allowed too). */
     fun pickZip(onResult: (Uri?) -> Unit) {
-        pickZipCallback = onResult
+        pickZipCallback = { uri ->
+            if (uri != null) UriAccess.persist(contentResolver, uri, write = false)
+            onResult(uri)
+        }
         pickZipLauncher.launch(
             arrayOf("application/zip", "application/x-zip-compressed", "application/x-zip", "application/octet-stream")
         )
@@ -86,7 +110,10 @@ class MainActivity : AppCompatActivity() {
 
     /** Download: the user chooses where the file is saved; [onResult] gets null when they cancel. */
     fun createDocument(name: String, mime: String, onResult: (Uri?) -> Unit) {
-        createDocumentCallback = onResult
+        createDocumentCallback = { uri ->
+            if (uri != null) UriAccess.persist(contentResolver, uri, write = true)
+            onResult(uri)
+        }
         createDocumentLauncher.launch(CreateDocumentRequest(name, mime))
     }
 
@@ -124,6 +151,7 @@ class MainActivity : AppCompatActivity() {
         ctx.history = HistoryScreen(ctx)
 
         showScreen(Screen.CONNECT)
+        ctx.attachTransfers()
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() = handleBack()
@@ -131,6 +159,12 @@ class MainActivity : AppCompatActivity() {
 
         // A token saved earlier: connect straight away
         ctx.connect.autoConnect()
+    }
+
+    override fun onDestroy() {
+        // Running uploads/downloads belong to TransferService and carry on; only this screen stops listening
+        ctx.detachTransfers()
+        super.onDestroy()
     }
 
     override fun onResume() {

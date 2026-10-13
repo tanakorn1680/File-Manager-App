@@ -11,6 +11,7 @@ import androidx.recyclerview.widget.RecyclerView
 import com.releasemanager.R
 import com.releasemanager.data.RunArtifact
 import com.releasemanager.data.WorkflowRun
+import com.releasemanager.network.DownloadJobs
 import com.releasemanager.network.RunLogReport
 import com.releasemanager.util.formatSize
 import kotlinx.coroutines.Dispatchers
@@ -181,19 +182,13 @@ class ActionsScreen(private val ctx: AppContext) {
         }
     }
 
+    /** Runs in TransferService: carries on (with a progress notification) if the app is closed. */
     private fun downloadFullLogs(repo: String, run: WorkflowRun, fileName: String, uri: Uri) {
         val api = ctx.api ?: return
-        ctx.toast.show("Downloading logs…")
-        ctx.launchSafe(onError = {
-            discardDocument(uri)
-            ctx.toast.error(it.userMessage())
-        }) {
-            withContext(Dispatchers.IO) {
-                val out = act.contentResolver.openOutputStream(uri, "w")
-                    ?: throw IOException("Could not open the destination file")
-                out.use { api.downloadRunLogs(repo, run.id, it) }
-            }
-            ctx.toast.success("Saved $fileName")
+        val cr = act.applicationContext.contentResolver
+        val runId = run.id
+        ctx.startDownload(fileName) { progress ->
+            DownloadJobs.runLogs(api, cr, uri, repo, runId, fileName, progress)
         }
     }
 
@@ -215,19 +210,13 @@ class ActionsScreen(private val ctx: AppContext) {
         }
     }
 
+    /** Runs in TransferService: carries on (with a progress notification) if the app is closed. */
     private fun downloadArtifact(repo: String, artifact: RunArtifact, fileName: String, uri: Uri) {
         val api = ctx.api ?: return
-        ctx.toast.show("Downloading ${artifact.name}…")
-        ctx.launchSafe(onError = {
-            discardDocument(uri)
-            ctx.toast.error(it.userMessage())
-        }) {
-            withContext(Dispatchers.IO) {
-                val out = act.contentResolver.openOutputStream(uri, "w")
-                    ?: throw IOException("Could not open the destination file")
-                out.use { api.downloadArtifact(repo, artifact.id, it) }
-            }
-            ctx.toast.success("Saved $fileName")
+        val cr = act.applicationContext.contentResolver
+        val artifactId = artifact.id
+        ctx.startDownload(fileName) { progress ->
+            DownloadJobs.artifact(api, cr, uri, repo, artifactId, fileName, progress)
         }
     }
 

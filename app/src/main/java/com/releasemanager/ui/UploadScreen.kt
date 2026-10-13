@@ -14,7 +14,13 @@ import com.releasemanager.R
 import com.releasemanager.data.EditMode
 import com.releasemanager.data.STAGED_DIR
 import com.releasemanager.data.StagedFile
-import com.releasemanager.network.GitPhase
+import com.releasemanager.network.PickedSource
+import com.releasemanager.network.UploadJobs
+import com.releasemanager.network.UriAccess
+import com.releasemanager.network.ZipScan
+import com.releasemanager.service.Transfer
+import com.releasemanager.service.TransferKind
+import com.releasemanager.service.TransferState
 import com.releasemanager.util.formatSize
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -22,20 +28,18 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
-import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 
 /**
- * Web: #screen-upload — "Upload Files" and "Upload ZIP". Quick Edit commits straight to GitHub
- * (one commit per chunk read); Stage Mode only queues the files for "Commit all".
+ * Web: #screen-upload — "Upload Files" and "Upload ZIP". Quick Edit commits straight to GitHub — that work runs
+ * in TransferService (background, progress in the notification), so it carries on if the app is closed;
+ * Stage Mode only queues the files for "Commit all".
  */
 class UploadScreen(private val ctx: AppContext) {
 
     enum class Mode { FILES, ZIP }
 
     private class Picked(val uri: Uri, val name: String, val size: Long)
-
-    private class ZipTarget(val entry: ZipEntry, val name: String, val path: String)
 
     private enum class Kind { NORMAL, WORKING, DONE, ERROR }
 
@@ -62,6 +66,9 @@ class UploadScreen(private val ctx: AppContext) {
     private var summaryMode = false
     private var uploading = false
 
+    /** The background upload this screen is showing (Quick Edit only), null when none. */
+    private var transfer: Transfer? = null
+
     init {
         root.findViewById<ImageButton>(R.id.btnBack).setOnClickListener { ctx.show(Screen.FILES) }
         dropZone.setOnClickListener { pick() }
@@ -76,6 +83,7 @@ class UploadScreen(private val ctx: AppContext) {
             return
         }
         mode = newMode
+        releasePicked()
         picked = emptyList()
         rowStatus.clear()
         fileList.removeAllViews()
@@ -111,6 +119,7 @@ class UploadScreen(private val ctx: AppContext) {
     private fun handlePicked(uris: List<Uri>) {
         ctx.launchSafe {
             val described = withContext(Dispatchers.IO) { uris.map { describe(it) } }
+            releasePicked()
             if (mode == Mode.ZIP) {
                 val zip = described.first()
                 if (!zip.name.endsWith(".zip", ignoreCase = true)) {
@@ -172,12 +181,12 @@ class UploadScreen(private val ctx: AppContext) {
     private fun startUpload() {
         if (uploading || picked.isEmpty()) return
 
-        // Whole files are read into memory to be committed, so refuse the ones that cannot fit up front
+        // Whole files go through the clone, so refuse the ones GitHub would reject up front
         // instead of failing half way through
         if (mode == Mode.FILES) {
-            val tooBig = picked.firstOrNull { it.size > maxFileBytes() }
+            val tooBig = picked.firstOrNull { it.size > UploadJobs.GITHUB_MAX_FILE_BYTES }
             if (tooBig != null) {
-                ctx.toast.error(tooLargeMessage(tooBig.name, tooBig.size), 8000)
+                ctx.toast.error(UploadJobs.tooLargeMessage(tooBig.name, tooBig.size), 8000)
                 return
             }
         }
@@ -189,81 +198,107 @@ class UploadScreen(private val ctx: AppContext) {
         progress2.progress = 0
         progressGroup.visibility = View.VISIBLE
 
+        if (state.editMode != EditMode.STAGE) {
+            startPushTransfer()
+            return
+        }
+
+        // Stage Mode only copies into app storage: quick, local, stays on this screen
         ctx.launchSafe {
             try {
-                if (mode == Mode.ZIP) doZipUpload() else doFilesUpload()
+                if (mode == Mode.ZIP) doZipStage() else doFilesStage()
             } finally {
                 uploading = false
                 btnDoUpload.isEnabled = true
+                releasePicked()
             }
         }
     }
 
     /**
-     * Web: doFilesUpload(). Quick Edit works like Termux: clone, copy the files in, ONE commit, ONE git push —
-     * any number of files, any size up to GitHub's 100 MB, nothing read into memory. Stage Mode only queues.
+     * Quick Edit (web: doFilesUpload / doZipUpload): clone, copy the files in, ONE commit, ONE git push — any
+     * number of files, any size up to GitHub's 100 MB, nothing read into memory. It runs in TransferService, so
+     * closing the app does not stop it; progress is shown here while the screen is open and in the notification.
      */
-    private suspend fun doFilesUpload() {
-        if (state.editMode == EditMode.STAGE) doFilesStage() else doFilesPush()
-    }
+    private fun startPushTransfer() {
+        val api = ctx.api
+        val repo = state.currentRepo
+        if (api == null || repo == null) {
+            ctx.toast.error(if (api == null) "Not connected to GitHub" else "No repository selected")
+            uploading = false
+            btnDoUpload.isEnabled = true
+            progressGroup.visibility = View.GONE
+            return
+        }
 
-    private class PushSource(val path: String, val open: () -> java.io.InputStream)
-
-    /** Clone → copy every source in → one commit → one push. [onCopying] gets the index of the file being copied. */
-    private suspend fun pushSources(sources: List<PushSource>, message: String, onCopying: (Int) -> Unit) {
-        val api = ctx.api ?: throw IOException("Not connected to GitHub")
-        val repo = state.currentRepo ?: throw IOException("No repository selected")
+        // Plain copies of everything the background work needs: it must not reach into this screen
         val branch = state.currentBranch
-        val total = sources.size
-        val session = api.openGitSession(act.cacheDir, repo, branch) { phase, text, pct ->
-            act.runOnUiThread {
-                label1.text = text
-                if (phase == GitPhase.PUSH && pct >= 0) setProgress(progress1, 0.5 + pct / 200.0)
-            }
-        }
-        try {
-            for ((i, src) in sources.withIndex()) {
-                label1.text = "Copying ${i + 1}/$total…"
-                onCopying(i)
-                session.addFile(src.path, src.open)
-                setProgress(progress1, (i + 1).toDouble() / total * 0.5)
-            }
-            session.commitAndPush(message)
-            setProgress(progress1, 1.0)
-        } finally {
-            session.close()
-        }
-    }
-
-    private suspend fun doFilesPush() {
         val dir = state.currentPath
-        val files = picked
-        val total = files.size
-        val commitMsg = inputCommitMsg.text.toString().ifEmpty { "Upload files" }
+        val cr = act.applicationContext.contentResolver
+        val cacheDir = act.cacheDir
+        val files = picked.map { PickedSource(it.uri, it.name) }
+        val zip = mode == Mode.ZIP
+        val message = inputCommitMsg.text.toString().ifEmpty { if (zip) "Upload ZIP contents" else "Upload files" }
 
-        label1.text = "Uploading files"
+        label1.text = if (zip) "Reading ZIP" else "Uploading files"
         label2.visibility = View.GONE
         progress2.visibility = View.GONE
+        if (zip) setStatus(0, "Reading ZIP…", Kind.WORKING)
 
-        try {
-            val sources = files.map { f ->
-                PushSource(if (dir.isNotEmpty()) "$dir/${f.name}" else f.name) { openPicked(f) }
+        val title = if (zip || files.size == 1) files[0].name else "${files.size} files"
+        transfer = ctx.startTransfer(TransferKind.UPLOAD, title, "repo:$repo", ::onTransferUpdate) { progress ->
+            if (zip) {
+                UploadJobs.pushZip(api, cr, cacheDir, repo, branch, dir, files[0].uri, message, progress)
+            } else {
+                UploadJobs.pushFiles(api, cr, cacheDir, repo, branch, dir, files, message, progress)
             }
-            pushSources(sources, commitMsg) { i ->
-                setStatus(i, if (summaryMode) "Copying ${i + 1}/$total…" else "Copying…", Kind.WORKING)
+        }
+    }
+
+    /** Progress and the final result of the background upload (only while this screen's Activity is alive). */
+    private fun onTransferUpdate(t: Transfer) {
+        if (t.id != transfer?.id) return
+
+        if (t.isRunning) {
+            if (t.label.isNotEmpty()) label1.text = t.label
+            if (t.fraction >= 0f) setProgress(progress1, t.fraction.toDouble())
+            if (t.itemIndex >= 0) {
+                val oneRow = summaryMode || mode == Mode.ZIP
+                setStatus(if (oneRow) 0 else t.itemIndex, if (oneRow) t.itemText else "Copying…", Kind.WORKING)
             }
-            if (summaryMode) setStatus(0, "✓ $total files", Kind.DONE)
-            else for (j in 0 until total) setStatus(j, "✓", Kind.DONE)
-            ctx.toast.success("$total file${if (total > 1) "s" else ""} uploaded")
-            delay(AFTER_UPLOAD_DELAY_MS)
-            backToFiles(false)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            // Nothing was committed: one push is all-or-nothing
-            if (summaryMode) setStatus(0, "Failed", Kind.ERROR)
-            else for (j in 0 until total) setStatus(j, "Failed", Kind.ERROR)
-            ctx.toast.error(e.userMessage(), 8000)
+            return
+        }
+
+        transfer = null
+        uploading = false
+        btnDoUpload.isEnabled = true
+        val total = picked.size
+        fun markRows(text: String, kind: Kind) {
+            if (summaryMode || mode == Mode.ZIP) setStatus(0, text, kind)
+            else for (j in 0 until total) setStatus(j, text, kind)
+        }
+        when (t.state) {
+            TransferState.SUCCESS -> {
+                setProgress(progress1, 1.0)
+                if (summaryMode) setStatus(0, "✓ $total files", Kind.DONE)
+                else if (mode == Mode.ZIP) setStatus(0, "✓ Done", Kind.DONE)
+                else markRows("✓", Kind.DONE)
+                ctx.toast.success(t.message ?: "Uploaded")
+                ctx.launchSafe {
+                    delay(AFTER_UPLOAD_DELAY_MS)
+                    backToFiles(false)
+                }
+            }
+            TransferState.FAILED -> {
+                // Nothing was committed: one push is all-or-nothing
+                markRows("Failed", Kind.ERROR)
+                ctx.toast.error(t.message ?: "Upload failed", 8000)
+            }
+            TransferState.CANCELLED -> {
+                markRows("Cancelled", Kind.ERROR)
+                ctx.toast.show("Upload cancelled")
+            }
+            TransferState.RUNNING -> Unit
         }
     }
 
@@ -307,12 +342,10 @@ class UploadScreen(private val ctx: AppContext) {
         }
     }
 
-    /** Web: doZipUpload(). Quick Edit unpacks straight into one git push; Stage Mode queues in memory. */
-    private suspend fun doZipUpload() {
+    /** Stage Mode only: the ZIP's files are copied to app storage and queued for "Commit all". */
+    private suspend fun doZipStage() {
         val dir = state.currentPath
         val pick = picked.firstOrNull() ?: return
-        val stage = state.editMode == EditMode.STAGE
-        val commitMsg = inputCommitMsg.text.toString().ifEmpty { "Upload ZIP contents" }
         var tempFile: File? = null
 
         label1.text = "Reading ZIP"
@@ -342,29 +375,22 @@ class UploadScreen(private val ctx: AppContext) {
                     ctx.toast.error("ZIP contains no files")
                     return
                 }
-                val tooBig = targets.firstOrNull { it.entry.size > maxFileBytes() }
-                if (tooBig != null) throw IOException(tooLargeMessage(tooBig.name, tooBig.entry.size))
+                val tooBig = targets.firstOrNull { it.entry.size > UploadJobs.GITHUB_MAX_FILE_BYTES }
+                if (tooBig != null) throw IOException(UploadJobs.tooLargeMessage(tooBig.name, tooBig.entry.size))
 
                 val total = targets.size
-                if (stage) {
-                    for ((read, t) in targets.withIndex()) {
-                        val disk = withContext(Dispatchers.IO) { stageToDisk { zip.getInputStream(t.entry) } }
-                        state.stagedFiles[t.path] = StagedFile(t.path, t.name, null, "file", "upload", null, disk.absolutePath)
-                        setProgress(progress1, (read + 1).toDouble() / total)
-                        setStatus(0, "${read + 1}/$total staged", Kind.WORKING)
-                    }
-                    setProgress(progress1, 1.0)
-                    setStatus(0, "$total files staged", Kind.DONE)
-                    ctx.files.updateStagedBadge()
-                    ctx.toast.success("Staged $total files from ZIP — press Commit All to apply")
-                } else {
-                    val sources = targets.map { t -> PushSource(t.path) { zip.getInputStream(t.entry) } }
-                    pushSources(sources, commitMsg) { i -> setStatus(0, "Copying ${i + 1}/$total…", Kind.WORKING) }
-                    setStatus(0, "✓ $total files", Kind.DONE)
-                    ctx.toast.success("Uploaded $total files from ZIP")
+                for ((read, t) in targets.withIndex()) {
+                    val disk = withContext(Dispatchers.IO) { stageToDisk { zip.getInputStream(t.entry) } }
+                    state.stagedFiles[t.path] = StagedFile(t.path, t.name, null, "file", "upload", null, disk.absolutePath)
+                    setProgress(progress1, (read + 1).toDouble() / total)
+                    setStatus(0, "${read + 1}/$total staged", Kind.WORKING)
                 }
+                setProgress(progress1, 1.0)
+                setStatus(0, "$total files staged", Kind.DONE)
+                ctx.files.updateStagedBadge()
+                ctx.toast.success("Staged $total files from ZIP — press Commit All to apply")
                 delay(AFTER_UPLOAD_DELAY_MS)
-                backToFiles(stage)
+                backToFiles(true)
             }
         } catch (e: CancellationException) {
             throw e
@@ -377,57 +403,12 @@ class UploadScreen(private val ctx: AppContext) {
         }
     }
 
-    /** Web: the ZIP-Slip / duplicate / malformed-path filtering, entry by entry. */
-    private fun collectZipTargets(zip: ZipFile, dir: String): List<ZipTarget> {
-        val byPath = LinkedHashMap<String, ZipTarget>() // lower-cased target path → entry (GitHub is case-insensitive in practice)
-        var duplicateCount = 0
-        val skippedMalformed = mutableListOf<String>()
-
-        for (entry in zip.entries().toList()) {
-            if (entry.isDirectory) continue
-            val normalized = entry.name.replace('\\', '/')
-            if (normalized.contains("..") || normalized.startsWith("/")) continue
-            if (normalized == ".DS_Store" || normalized.startsWith("__MACOSX/") || normalized.contains("/.DS_Store")) continue
-            val targetPath = if (dir.isNotEmpty()) "$dir/$normalized" else normalized
-            if (findMalformedSegment(targetPath) != null) {
-                skippedMalformed.add(targetPath)
-                continue
-            }
-            val key = targetPath.lowercase()
-            if (byPath.containsKey(key)) duplicateCount++
-            byPath[key] = ZipTarget(entry, normalized, targetPath) // the last occurrence wins
-        }
-
-        if (duplicateCount > 0) {
-            ctx.toast.show(
-                "Skipped $duplicateCount duplicate path${if (duplicateCount > 1) "s" else ""} in ZIP (kept the last version of each)",
-                durationMs = 4000
-            )
-        }
-        if (skippedMalformed.isNotEmpty()) {
-            val preview = skippedMalformed.take(3).joinToString(", ")
-            val more = if (skippedMalformed.size > 3) " and ${skippedMalformed.size - 3} more" else ""
-            ctx.toast.show(
-                "Skipped ${skippedMalformed.size} file(s) with invalid paths: $preview$more",
-                durationMs = 8000
-            )
-        }
-        return byPath.values.toList()
-    }
-
-    /**
-     * Segments GitHub's Trees API calls "malformed": empty, "." / "..", ".git", leading/trailing
-     * whitespace or a trailing dot (Windows-made ZIPs often have these without the author noticing).
-     */
-    private fun findMalformedSegment(targetPath: String): String? {
-        for (seg in targetPath.split('/')) {
-            if (seg.isEmpty()) return "(empty segment)"
-            if (seg == "." || seg == "..") return seg
-            if (seg == ".git") return seg
-            if (seg != seg.trim()) return seg
-            if (seg.endsWith(".")) return seg
-        }
-        return null
+    /** Scans the ZIP and announces what was skipped (Stage Mode; the background upload puts it in its result). */
+    private fun collectZipTargets(zip: ZipFile, dir: String): List<com.releasemanager.network.ZipTarget> {
+        val scan = ZipScan.collect(zip, dir)
+        scan.duplicateMessage?.let { ctx.toast.show(it, durationMs = 4000) }
+        scan.malformedMessage?.let { ctx.toast.show(it, durationMs = 8000) }
+        return scan.targets
     }
 
     // ── Reading ──────────────────────────────────────────────────────────────
@@ -458,14 +439,13 @@ class UploadScreen(private val ctx: AppContext) {
         return out
     }
 
-    private fun maxFileBytes() = GITHUB_MAX_FILE_BYTES
-
-    private fun tooLargeMessage(name: String, size: Long) =
-        "\"$name\" is ${formatSize(size)} — GitHub does not accept files over " +
-            "${formatSize(GITHUB_MAX_FILE_BYTES)} in a repository. Attach large files to a release instead."
-
     private fun openPicked(f: Picked): java.io.InputStream =
         act.contentResolver.openInputStream(f.uri) ?: throw IOException("Could not read \"${f.name}\"")
+
+    /** Gives back the persistable Uri grants taken when the files were picked (the background upload does this itself). */
+    private fun releasePicked() {
+        picked.forEach { UriAccess.release(act.contentResolver, it.uri) }
+    }
 
     // ── UI helpers ───────────────────────────────────────────────────────────
 
@@ -497,9 +477,6 @@ class UploadScreen(private val ctx: AppContext) {
     private companion object {
         /** Web: UPLOAD_LIST_ROW_CAP. */
         const val UPLOAD_LIST_ROW_CAP = 300
-
-        /** GitHub itself refuses files over 100 MB in a repository, whatever tool is used. */
-        const val GITHUB_MAX_FILE_BYTES = 100L * 1024 * 1024
 
         const val AFTER_UPLOAD_DELAY_MS = 1200L
     }

@@ -16,9 +16,14 @@ import com.releasemanager.data.UploadItem
 import com.releasemanager.data.WorkflowJob
 import com.releasemanager.data.WorkflowRun
 import com.releasemanager.data.WorkflowStep
+import com.releasemanager.util.copyStream
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
@@ -34,10 +39,12 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.json.JSONTokener
 import java.io.File
+import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resumeWithException
 
 /**
  * Talks to GitHub's REST API directly from the device — no server of ours
@@ -69,8 +76,27 @@ class GitHubApi(private val token: String) {
         .addHeader("Accept", "application/vnd.github+json")
         .addHeader("X-GitHub-Api-Version", "2022-11-28")
 
+    /**
+     * Runs the call without blocking a thread and cancels it (even half way through sending the body)
+     * when the coroutine is cancelled — that is what makes "Cancel" in the notification stop a running upload.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private suspend fun Call.await(): Response = suspendCancellableCoroutine { cont ->
+        cont.invokeOnCancellation { cancel() }
+        enqueue(object : Callback {
+            override fun onResponse(call: Call, response: Response) {
+                // If the coroutine was cancelled in the meantime nobody will read this response: close it
+                cont.resume(response) { response.close() }
+            }
+
+            override fun onFailure(call: Call, e: IOException) {
+                if (!cont.isCancelled) cont.resumeWithException(e)
+            }
+        })
+    }
+
     private suspend fun execute(request: Request): JSONObject? = withContext(Dispatchers.IO) {
-        client.newCall(request).execute().use { resp ->
+        client.newCall(request).await().use { resp ->
             val bodyStr = resp.body?.string().orEmpty()
             if (!resp.isSuccessful) {
                 val msg = try { JSONObject(bodyStr).optString("message", "HTTP ${resp.code}") }
@@ -286,20 +312,34 @@ class GitHubApi(private val token: String) {
         return FileContent(String(bytes, Charsets.UTF_8), o.getString("sha"), o.optLong("size", 0L))
     }
 
-    /** Streams the raw bytes of a file into [sink] (works up to 100 MB; does not close [sink]). */
-    suspend fun downloadFile(repo: String, path: String, branch: String, sink: OutputStream) {
+    /**
+     * Streams the raw bytes of a file into [sink] (works up to 100 MB; does not close [sink]).
+     * [onProgress] gets (bytes so far, total or -1).
+     */
+    suspend fun downloadFile(
+        repo: String,
+        path: String,
+        branch: String,
+        sink: OutputStream,
+        onProgress: ((done: Long, total: Long) -> Unit)? = null
+    ) {
         withContext(Dispatchers.IO) {
             val req = authedRequest(contentsUrl(repo, path, branch))
                 .header("Accept", "application/vnd.github.raw+json")
                 .get().build()
-            client.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) {
-                    val bodyStr = resp.body?.string().orEmpty()
-                    throw GitHubApiException(errorMessage(bodyStr, resp.code), resp.code)
-                }
-                val body = resp.body ?: throw GitHubApiException("Empty response from GitHub", 0)
-                body.byteStream().copyTo(sink)
+            streamResponse(req, sink, onProgress)
+        }
+    }
+
+    /** Sends [req] and copies the body into [sink], reporting progress and honouring cancellation. */
+    private suspend fun streamResponse(req: Request, sink: OutputStream, onProgress: ((Long, Long) -> Unit)?) {
+        client.newCall(req).await().use { resp ->
+            if (!resp.isSuccessful) {
+                val bodyStr = resp.body?.string().orEmpty()
+                throw GitHubApiException(errorMessage(bodyStr, resp.code), resp.code)
             }
+            val body = resp.body ?: throw GitHubApiException("Empty response from GitHub", 0)
+            body.byteStream().use { copyStream(it, sink, body.contentLength(), onProgress) }
         }
     }
 
@@ -451,17 +491,15 @@ class GitHubApi(private val token: String) {
      * Streams an artifact's ZIP into [sink] (does not close it). GitHub answers with a redirect to
      * temporary storage; OkHttp follows it and drops the Authorization header for the other host.
      */
-    suspend fun downloadArtifact(repo: String, artifactId: Long, sink: OutputStream) {
+    suspend fun downloadArtifact(
+        repo: String,
+        artifactId: Long,
+        sink: OutputStream,
+        onProgress: ((done: Long, total: Long) -> Unit)? = null
+    ) {
         withContext(Dispatchers.IO) {
             val req = authedRequest("https://api.github.com/repos/$repo/actions/artifacts/$artifactId/zip").get().build()
-            client.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) {
-                    val bodyStr = resp.body?.string().orEmpty()
-                    throw GitHubApiException(errorMessage(bodyStr, resp.code), resp.code)
-                }
-                val body = resp.body ?: throw GitHubApiException("Empty response from GitHub", 0)
-                body.byteStream().copyTo(sink)
-            }
+            streamResponse(req, sink, onProgress)
         }
     }
 
@@ -551,17 +589,15 @@ class GitHubApi(private val token: String) {
     }
 
     /** Streams the ZIP with the raw logs of every job of a run into [sink] (does not close it). */
-    suspend fun downloadRunLogs(repo: String, runId: Long, sink: OutputStream) {
+    suspend fun downloadRunLogs(
+        repo: String,
+        runId: Long,
+        sink: OutputStream,
+        onProgress: ((done: Long, total: Long) -> Unit)? = null
+    ) {
         withContext(Dispatchers.IO) {
             val req = authedRequest("https://api.github.com/repos/$repo/actions/runs/$runId/logs").get().build()
-            client.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) {
-                    val bodyStr = resp.body?.string().orEmpty()
-                    throw GitHubApiException(errorMessage(bodyStr, resp.code), resp.code)
-                }
-                val body = resp.body ?: throw GitHubApiException("Empty response from GitHub", 0)
-                body.byteStream().copyTo(sink)
-            }
+            streamResponse(req, sink, onProgress)
         }
     }
 

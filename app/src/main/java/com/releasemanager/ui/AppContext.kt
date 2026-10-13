@@ -4,6 +4,12 @@ import androidx.lifecycle.lifecycleScope
 import com.releasemanager.data.AppState
 import com.releasemanager.data.TokenStore
 import com.releasemanager.network.GitHubApi
+import com.releasemanager.service.Transfer
+import com.releasemanager.service.TransferKind
+import com.releasemanager.service.TransferManager
+import com.releasemanager.service.TransferOutcome
+import com.releasemanager.service.TransferProgress
+import com.releasemanager.service.TransferState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -52,6 +58,61 @@ class AppContext(
             throw e
         } catch (e: Exception) {
             onError(e)
+        }
+    }
+
+    // ── Background transfers (TransferService) ───────────────────────────────
+
+    /** Per-transfer callbacks; they live and die with this Activity, the transfer itself does not. */
+    private val transferHandlers = HashMap<Int, (Transfer) -> Unit>()
+
+    private val transferListener = TransferManager.Listener { t ->
+        val handler = transferHandlers[t.id]
+        if (handler != null) {
+            handler(t)
+            if (!t.isRunning) transferHandlers.remove(t.id)
+        }
+    }
+
+    fun attachTransfers() = TransferManager.addListener(transferListener)
+
+    fun detachTransfers() {
+        TransferManager.removeListener(transferListener)
+        transferHandlers.clear()
+    }
+
+    /**
+     * Starts [block] as an upload/download that keeps running in the background (foreground service with a
+     * progress notification) even if the app is closed. [onUpdate] is called on the main thread with every
+     * progress step and with the final state, but only while this Activity is still alive.
+     * [block] must not touch the Activity, a View or [state]: copy what it needs into local values first.
+     */
+    fun startTransfer(
+        kind: TransferKind,
+        title: String,
+        tag: String? = null,
+        onUpdate: ((Transfer) -> Unit)? = null,
+        block: suspend (TransferProgress) -> TransferOutcome
+    ): Transfer {
+        activity.requestNotificationPermission()
+        val t = TransferManager.start(activity, kind, title, tag, block)
+        if (onUpdate != null) transferHandlers[t.id] = onUpdate
+        return t
+    }
+
+    /** A download: the result is announced with a toast (and always with a notification). */
+    fun startDownload(title: String, block: suspend (TransferProgress) -> TransferOutcome): Transfer {
+        toast.show("Downloading $title — progress is in the notification")
+        return startTransfer(TransferKind.DOWNLOAD, title, null, { toastResult(it) }, block)
+    }
+
+    /** Toast for the final state of a transfer; progress steps are ignored. */
+    fun toastResult(t: Transfer) {
+        when (t.state) {
+            TransferState.SUCCESS -> toast.success(t.message ?: "Done")
+            TransferState.FAILED -> toast.error(t.message ?: "Failed", 8000)
+            TransferState.CANCELLED -> toast.show("Cancelled")
+            TransferState.RUNNING -> Unit
         }
     }
 

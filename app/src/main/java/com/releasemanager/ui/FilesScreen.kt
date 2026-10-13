@@ -34,12 +34,18 @@ import com.releasemanager.data.GitHubApiException
 import com.releasemanager.data.STAGED_DIR
 import com.releasemanager.data.StagedFile
 import com.releasemanager.data.UploadItem
+import com.releasemanager.network.DownloadJobs
+import com.releasemanager.network.PushSource
+import com.releasemanager.network.pushSources
+import com.releasemanager.service.TransferKind
+import com.releasemanager.service.TransferOutcome
+import com.releasemanager.service.TransferState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayInputStream
+import java.io.File
 import java.io.IOException
-import java.util.zip.ZipEntry
-import java.util.zip.ZipOutputStream
 
 /** Web: #screen-files — folder browser, select mode, file actions, Stage Mode queue. */
 class FilesScreen(private val ctx: AppContext) {
@@ -402,21 +408,16 @@ class FilesScreen(private val ctx: AppContext) {
         }
     }
 
+    /** Runs in TransferService: carries on (with a progress notification) if the app is closed. */
     private fun downloadSingle(file: FileEntry, uri: Uri) {
         val api = ctx.api ?: return
         val repo = state.currentRepo ?: return
         val branch = state.currentBranch
-        ctx.toast.show("Downloading…")
-        ctx.launchSafe(onError = {
-            discardDocument(uri)
-            ctx.toast.error(it.userMessage())
-        }) {
-            withContext(Dispatchers.IO) {
-                val out = act.contentResolver.openOutputStream(uri, "w")
-                    ?: throw IOException("Could not open the destination file")
-                out.use { api.downloadFile(repo, file.path, branch, it) }
-            }
-            ctx.toast.success("Saved ${file.name}")
+        val cr = act.applicationContext.contentResolver
+        val path = file.path
+        val name = file.name
+        ctx.startDownload(name) { progress ->
+            DownloadJobs.file(api, cr, uri, repo, path, branch, name, progress)
         }
     }
 
@@ -438,34 +439,15 @@ class FilesScreen(private val ctx: AppContext) {
         }
     }
 
-    /** Web: downloadMultiple() — several files go into one ZIP. */
+    /** Web: downloadMultiple() — several files go into one ZIP, written in the background. */
     private fun downloadZip(files: List<FileEntry>, uri: Uri) {
         val api = ctx.api ?: return
         val repo = state.currentRepo ?: return
         val branch = state.currentBranch
-        ctx.toast.show("Preparing download…")
-        ctx.launchSafe(onError = {
-            discardDocument(uri)
-            ctx.toast.error(it.userMessage())
-        }) {
-            withContext(Dispatchers.IO) {
-                val out = act.contentResolver.openOutputStream(uri, "w")
-                    ?: throw IOException("Could not open the destination file")
-                ZipOutputStream(out.buffered()).use { zip ->
-                    for (file in files) {
-                        zip.putNextEntry(ZipEntry(file.path))
-                        api.downloadFile(repo, file.path, branch, zip) // does not close the stream
-                        zip.closeEntry()
-                    }
-                }
-            }
-            ctx.toast.success("Downloaded ${files.size} files")
+        val cr = act.applicationContext.contentResolver
+        ctx.startDownload("${files.size} files") { progress ->
+            DownloadJobs.filesZip(api, cr, uri, repo, branch, files, progress)
         }
-    }
-
-    /** A failed download would leave an empty file behind at the chosen location. */
-    private fun discardDocument(uri: Uri) {
-        runCatching { DocumentsContract.deleteDocument(act.contentResolver, uri) }
     }
 
     // ── Delete ───────────────────────────────────────────────────────────────
@@ -762,7 +744,10 @@ class FilesScreen(private val ctx: AppContext) {
         dialog.show()
     }
 
-    /** Web: doCommitStaged() — uploads/edits first, then the deletions. */
+    /**
+     * Web: doCommitStaged() — uploads/edits first, then the deletions. The clone/commit/push runs in
+     * TransferService, so it carries on (with a progress notification) if the app is closed.
+     */
     private fun doCommitStaged(rawMessage: String) {
         if (committing) return
         val api = ctx.api ?: return
@@ -774,44 +759,60 @@ class FilesScreen(private val ctx: AppContext) {
 
         val toDelete = all.filter { it.action == "delete" }
         val toUpsert = all.filter { it.action != "delete" } // create, upload, edit
+        val cacheDir = act.cacheDir
+        // Paths already on GitHub: if the deletions fail afterwards, a retry must not re-send these
+        val pushed = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val count = all.size
+        val plural = if (count > 1) "s" else ""
 
         committing = true
-        ctx.toast.show("Committing…")
-        api.onRateLimitWait = { sec ->
-            if (sec > 0 && sec % 10 == 0) ctx.toast.show("GitHub rate limit — waiting ${sec}s, will continue…")
-        }
-        ctx.launchSafe(onError = { ctx.toast.error(it.userMessage()) }) {
+        ctx.toast.show("Committing — progress is in the notification")
+        ctx.startTransfer(
+            TransferKind.UPLOAD, "$count change$plural", "repo:$repo",
+            onUpdate = { t ->
+                if (!t.isRunning) {
+                    committing = false
+                    synchronized(pushed) { pushed.toList() }.forEach { state.stagedFiles.remove(it) }
+                    if (t.state == TransferState.SUCCESS) toDelete.forEach { state.stagedFiles.remove(it.path) }
+                    updateStagedBadge()
+                    when (t.state) {
+                        TransferState.SUCCESS -> {
+                            ctx.toast.success("Committed $count change$plural")
+                            loadFiles()
+                        }
+                        TransferState.CANCELLED -> ctx.toast.show("Commit cancelled")
+                        else -> ctx.toast.error(t.message ?: "Commit failed")
+                    }
+                }
+            }
+        ) { progress ->
+            api.onRateLimitWait = { sec ->
+                if (sec > 0) progress.label("GitHub rate limit — waiting ${sec}s, will continue…")
+            }
             try {
                 if (toUpsert.isNotEmpty()) {
                     // One clone, one commit, one push for all staged files (like Termux)
-                    val session = api.openGitSession(ctx.activity.cacheDir, repo, branch) { _, text, _ ->
-                        if (!text.contains('%')) ctx.activity.runOnUiThread { ctx.toast.show(text) }
-                    }
-                    try {
-                        for (sf in toUpsert) {
-                            val disk = sf.diskPath
-                            if (disk != null) session.addFile(sf.path) { java.io.File(disk).inputStream() }
-                            else session.addBytes(sf.path, Base64.decode(sf.content.orEmpty(), Base64.DEFAULT))
+                    val sources = toUpsert.map { sf ->
+                        val disk = sf.diskPath
+                        PushSource(sf.path) {
+                            if (disk != null) File(disk).inputStream()
+                            else ByteArrayInputStream(Base64.decode(sf.content.orEmpty(), Base64.DEFAULT))
                         }
-                        session.commitAndPush(message)
-                    } finally {
-                        session.close()
                     }
-                    // Already on GitHub: if the deletions below fail, a retry must not re-send these
-                    toUpsert.forEach { state.stagedFiles.remove(it.path) }
-                    clearStagedDisk()
+                    pushSources(api, cacheDir, repo, branch, message, sources, progress)
+                    toUpsert.forEach { sf ->
+                        pushed.add(sf.path)
+                        sf.diskPath?.let { File(it).delete() }
+                    }
                 }
                 if (toDelete.isNotEmpty()) {
+                    progress.update(-1f, "Deleting files…")
                     val targets = toDelete.map { DeleteTarget(it.path, it.type == "dir") }
                     api.deleteFiles(repo, branch, targets, message)
-                    toDelete.forEach { state.stagedFiles.remove(it.path) }
                 }
-                ctx.toast.success("Committed ${all.size} change${if (all.size > 1) "s" else ""}")
-                loadFiles()
+                TransferOutcome("Committed $count change$plural")
             } finally {
                 api.onRateLimitWait = null
-                committing = false
-                updateStagedBadge()
             }
         }
     }

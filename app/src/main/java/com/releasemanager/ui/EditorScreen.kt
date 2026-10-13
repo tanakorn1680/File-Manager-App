@@ -3,6 +3,7 @@ package com.releasemanager.ui
 import android.text.SpannableStringBuilder
 import android.text.Spanned
 import android.text.method.KeyListener
+import android.text.style.BackgroundColorSpan
 import android.text.style.StyleSpan
 import android.graphics.Typeface
 import android.os.Handler
@@ -11,8 +12,11 @@ import android.util.Base64
 import android.util.TypedValue
 import android.view.ScaleGestureDetector
 import android.view.View
+import android.view.inputmethod.EditorInfo
 import android.widget.EditText
+import android.widget.HorizontalScrollView
 import android.widget.ImageButton
+import android.widget.LinearLayout
 import android.widget.TextView
 import com.google.android.material.button.MaterialButton
 import com.releasemanager.R
@@ -28,8 +32,10 @@ import kotlinx.coroutines.Job
  * Everything here runs against the in-memory text that came straight from the GitHub API — there is
  * never a local copy to download: Commit / Stage both send this same buffer back over the API. On
  * top of that, the field behaves like a small code editor: line numbers kept in sync with its own
- * scroll, pinch-to-zoom, a word-wrap toggle, a read-only (view only, still scrollable) toggle, find
- * and jump-to-line, and lightweight syntax colouring by file extension (see SyntaxHighlighter).
+ * scroll, smooth pinch-to-zoom, a word-wrap toggle, a read-only (view only, still scrollable) toggle,
+ * an MT Manager-style find bar (live match count, prev/next, case toggle) with jump-to-line, a
+ * quick-symbol row for fast insertion, and lightweight syntax colouring by file extension (see
+ * SyntaxHighlighter).
  */
 class EditorScreen(private val ctx: AppContext) {
 
@@ -44,6 +50,19 @@ class EditorScreen(private val ctx: AppContext) {
     private val editorText: EditText = root.findViewById(R.id.editorText)
     private val lineNumbers: TextView = root.findViewById(R.id.editorLineNumbers)
 
+    // Find bar (MT Manager style)
+    private val findBar: View = root.findViewById(R.id.findBar)
+    private val findInput: EditText = root.findViewById(R.id.findInput)
+    private val findCount: TextView = root.findViewById(R.id.findCount)
+    private val btnFindCase: ImageButton = root.findViewById(R.id.btnFindCase)
+    private val btnFindPrev: ImageButton = root.findViewById(R.id.btnFindPrev)
+    private val btnFindNext: ImageButton = root.findViewById(R.id.btnFindNext)
+    private val btnFindClose: ImageButton = root.findViewById(R.id.btnFindClose)
+
+    // Quick-symbol row
+    private val symbolBarScroll: HorizontalScrollView = root.findViewById(R.id.symbolBarScroll)
+    private val symbolBar: LinearLayout = root.findViewById(R.id.symbolBar)
+
     private var loadJob: Job? = null
 
     /** True once the file's real content is in the editor; Commit / Stage stay off until then. */
@@ -57,7 +76,6 @@ class EditorScreen(private val ctx: AppContext) {
     private val defaultKeyListener: KeyListener? = editorText.keyListener
     private var wrapEnabled = true
     private var manualReadOnly = false
-    private var lastSearch = ""
     private var language = SyntaxHighlighter.Lang.NONE
 
     private val minTextSizeSp = 10f
@@ -68,10 +86,27 @@ class EditorScreen(private val ctx: AppContext) {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var pendingUpdate: Runnable? = null
 
+    // ── Find state ───────────────────────────────────────────────────────────
+    private var findMatches: List<Int> = emptyList()
+    private var findIndex = -1
+    private var findQuery = ""
+    private var findCaseSensitive = false
+    private var findBarOpen = false
+
+    /**
+     * Pinch-to-zoom: during an active gesture only the text size itself is updated (cheap) — the
+     * line-number gutter rebuild (recomputeLineNumbers, which walks the whole Layout) is debounced
+     * to run once after the fingers settle instead of on every onScale tick, so a pinch on a long
+     * file stays smooth instead of stuttering behind a backlog of gutter rebuilds.
+     */
     private val scaleDetector = ScaleGestureDetector(act, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
         override fun onScale(detector: ScaleGestureDetector): Boolean {
-            setTextSize((textSizeSp * detector.scaleFactor).coerceIn(minTextSizeSp, maxTextSizeSp))
+            setTextSize((textSizeSp * detector.scaleFactor).coerceIn(minTextSizeSp, maxTextSizeSp), settleGutter = false)
             return true
+        }
+
+        override fun onScaleEnd(detector: ScaleGestureDetector) {
+            scheduleGutterRefresh()
         }
     })
 
@@ -84,6 +119,7 @@ class EditorScreen(private val ctx: AppContext) {
             if (!programmaticChange) {
                 setDirty(editorText.text.toString() != state.editorOriginal)
                 scheduleContentUpdate()
+                if (findBarOpen) scheduleFindRefresh()
             }
         }
         // Pinch-to-zoom: the detector only observes the stream (it never consumes it), so normal
@@ -98,6 +134,9 @@ class EditorScreen(private val ctx: AppContext) {
                 editorText.post { recomputeLineNumbers() }
             }
         }
+
+        setupFindBar()
+        buildSymbolBar()
     }
 
     // ── Open ─────────────────────────────────────────────────────────────────
@@ -113,6 +152,7 @@ class EditorScreen(private val ctx: AppContext) {
         textTitle.text = file.name
         setEditorText("Loading…")
         updateControls()
+        if (findBarOpen) closeFindBar() else { findMatches = emptyList(); findIndex = -1 }
 
         // Stage Mode shows only "Stage", Quick Edit only "Commit"
         val stageMode = state.editMode == EditMode.STAGE
@@ -198,6 +238,11 @@ class EditorScreen(private val ctx: AppContext) {
 
     /** Web: #btn-back-editor. Also what the system Back button does on this screen. */
     fun onBack() {
+        if (findBarOpen) {
+            // Same two-step Back as MT Manager / most editors: close the find bar first
+            closeFindBar()
+            return
+        }
         if (state.editMode == EditMode.STAGE) {
             // Stage Mode: Back drops the unsaved edits of this file (the staged version stays)
             leave()
@@ -363,14 +408,28 @@ class EditorScreen(private val ctx: AppContext) {
 
     // ── Zoom ─────────────────────────────────────────────────────────────────
 
-    private fun setTextSize(sp: Float, force: Boolean = false) {
+    /**
+     * [settleGutter] = false (the default while a pinch is actively changing the size) skips the
+     * gutter rebuild entirely; the caller is expected to call [scheduleGutterRefresh] once the
+     * gesture ends. Every other caller (reset zoom, opening a file, the menu) wants the gutter kept
+     * in sync immediately, so they get the old behaviour.
+     */
+    private fun setTextSize(sp: Float, force: Boolean = false, settleGutter: Boolean = true) {
         val clamped = sp.coerceIn(minTextSizeSp, maxTextSizeSp)
         if (!force && clamped == textSizeSp) return
         textSizeSp = clamped
         editorText.setTextSize(TypedValue.COMPLEX_UNIT_SP, textSizeSp)
         lineNumbers.setTextSize(TypedValue.COMPLEX_UNIT_SP, textSizeSp)
-        editorText.post { recomputeLineNumbers() }
+        if (settleGutter) editorText.post { recomputeLineNumbers() } else scheduleGutterRefresh()
     }
+
+    /** Debounced gutter rebuild used while a pinch gesture is in progress (see [scaleDetector]). */
+    private fun scheduleGutterRefresh() {
+        mainHandler.removeCallbacks(gutterRefresh)
+        mainHandler.postDelayed(gutterRefresh, 120)
+    }
+
+    private val gutterRefresh = Runnable { editorText.post { recomputeLineNumbers() } }
 
     private fun resetZoom() = setTextSize(defaultTextSizeSp, force = true)
 
@@ -404,7 +463,7 @@ class EditorScreen(private val ctx: AppContext) {
         Dialogs.sheet(
             act, state.editingFile?.name ?: "Editor",
             listOf(
-                Dialogs.SheetItem("Find in file", R.drawable.ic_search, onClick = { openFindDialog() }),
+                Dialogs.SheetItem("Find in file", R.drawable.ic_search, onClick = { openFindBar() }),
                 Dialogs.SheetItem("Jump to line", R.drawable.ic_arrow_right, onClick = { openJumpToLineDialog() }),
                 Dialogs.SheetItem(
                     wrapLabel, R.drawable.ic_check_square,
@@ -427,35 +486,150 @@ class EditorScreen(private val ctx: AppContext) {
         )
     }
 
-    // ── Find ─────────────────────────────────────────────────────────────────
+    // ── Find (MT Manager-style persistent bar: live match count, prev/next, case toggle) ──────
 
-    private fun openFindDialog() {
+    private fun setupFindBar() {
+        btnFindClose.setOnClickListener { closeFindBar() }
+        btnFindCase.setOnClickListener {
+            findCaseSensitive = !findCaseSensitive
+            btnFindCase.alpha = if (findCaseSensitive) 1f else 0.45f
+            runFind(keepIndexNear = true)
+        }
+        btnFindPrev.setOnClickListener { stepFind(-1) }
+        btnFindNext.setOnClickListener { stepFind(1) }
+        findInput.onTextChanged {
+            findQuery = findInput.text.toString()
+            runFind(keepIndexNear = false)
+        }
+        findInput.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_SEARCH) {
+                stepFind(1)
+                true
+            } else {
+                false
+            }
+        }
+        btnFindCase.alpha = 0.45f
+    }
+
+    private fun openFindBar() {
         if (!loaded) return
-        Dialogs.prompt(
-            act, title = "Find in file", label = "Text to find",
-            initial = lastSearch, positive = "Find", allowEmpty = false
-        ) { query ->
-            lastSearch = query
-            findNext(query)
+        findBarOpen = true
+        findBar.visibility = View.VISIBLE
+        findInput.setText(findQuery)
+        findInput.setSelection(findInput.text.length)
+        findInput.showKeyboard()
+        runFind(keepIndexNear = false)
+    }
+
+    private fun closeFindBar() {
+        findBarOpen = false
+        findBar.visibility = View.GONE
+        clearFindHighlights()
+        findInput.hideKeyboard()
+        editorText.requestFocus()
+    }
+
+    /** Re-run while typing (debounced) so a fast typist doesn't trigger a full-text scan per key. */
+    private fun scheduleFindRefresh() {
+        mainHandler.removeCallbacks(findRefresh)
+        mainHandler.postDelayed(findRefresh, 150)
+    }
+
+    private val findRefresh = Runnable { runFind(keepIndexNear = true) }
+
+    /**
+     * Rebuilds [findMatches] for the current query against the live editor text, highlights every
+     * match, and keeps [findIndex] pointing at the same match (by position) when [keepIndexNear] is
+     * true — e.g. after a Match case toggle or an edit elsewhere in the file — rather than always
+     * snapping back to the first result.
+     */
+    private fun runFind(keepIndexNear: Boolean) {
+        val text = editorText.text?.toString().orEmpty()
+        val query = findQuery
+        val previousStart = findMatches.getOrNull(findIndex)
+
+        clearFindHighlights()
+        findMatches = if (query.isEmpty() || text.isEmpty()) {
+            emptyList()
+        } else {
+            buildList {
+                var from = 0
+                while (true) {
+                    val idx = text.indexOf(query, from, ignoreCase = !findCaseSensitive)
+                    if (idx < 0) break
+                    add(idx)
+                    from = idx + query.length
+                }
+            }
+        }
+
+        findIndex = when {
+            findMatches.isEmpty() -> -1
+            keepIndexNear && previousStart != null -> {
+                val carried = findMatches.indexOfFirst { it >= previousStart }
+                if (carried >= 0) carried else 0
+            }
+            else -> 0
+        }
+
+        highlightMatches()
+        updateFindCount()
+        if (findIndex >= 0) revealMatch(findIndex, selectIt = query.isNotEmpty() && keepIndexNear)
+    }
+
+    private fun stepFind(direction: Int) {
+        if (findMatches.isEmpty()) {
+            if (findQuery.isNotEmpty()) ctx.toast.show("\"$findQuery\" not found")
+            return
+        }
+        findIndex = (findIndex + direction + findMatches.size) % findMatches.size
+        updateFindCount()
+        revealMatch(findIndex, selectIt = true)
+    }
+
+    private fun updateFindCount() {
+        findCount.text = if (findMatches.isEmpty()) {
+            if (findQuery.isEmpty()) "" else "0/0"
+        } else {
+            "${findIndex + 1}/${findMatches.size}"
         }
     }
 
-    private fun findNext(query: String) {
-        val text = editorText.text?.toString().orEmpty()
-        if (query.isEmpty() || text.isEmpty()) return
-        val from = editorText.selectionEnd.coerceIn(0, text.length)
-        var idx = text.indexOf(query, from, ignoreCase = true)
-        var wrapped = false
-        if (idx < 0) {
-            idx = text.indexOf(query, 0, ignoreCase = true)
-            wrapped = true
+    /** Soft highlight on every match (MT Manager dims all hits, not just the current one). */
+    private fun highlightMatches() {
+        val editable = editorText.text ?: return
+        val len = findQuery.length
+        if (len == 0) return
+        for (start in findMatches) {
+            editable.setSpan(
+                FindHighlightSpan(act.color(R.color.accent_light)),
+                start, (start + len).coerceAtMost(editable.length),
+                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+            )
         }
-        if (idx < 0) {
-            ctx.toast.show("\"$query\" not found")
-            return
+    }
+
+    private fun clearFindHighlights() {
+        val editable = editorText.text ?: return
+        editable.getSpans(0, editable.length, FindHighlightSpan::class.java).forEach { editable.removeSpan(it) }
+    }
+
+    /** Marker subclass so highlight spans can be found + cleared without touching syntax-colour spans. */
+    private class FindHighlightSpan(color: Int) : BackgroundColorSpan(color)
+
+    private fun revealMatch(index: Int, selectIt: Boolean) {
+        val start = findMatches.getOrNull(index) ?: return
+        val end = (start + findQuery.length).coerceAtMost(editorText.text?.length ?: start)
+        if (selectIt) editorText.setSelection(start, end)
+        editorText.post {
+            editorText.layout?.let { layout ->
+                val line = layout.getLineForOffset(start)
+                val y = layout.getLineTop(line)
+                editorText.scrollTo(editorText.scrollX, (y - editorText.height / 3).coerceAtLeast(0))
+                lineNumbers.scrollTo(0, editorText.scrollY)
+            }
         }
-        selectAndReveal(idx, idx + query.length)
-        if (wrapped) ctx.toast.show("Reached the end — continuing from the top")
     }
 
     // ── Jump to line ─────────────────────────────────────────────────────────
@@ -502,5 +676,34 @@ class EditorScreen(private val ctx: AppContext) {
                 lineNumbers.scrollTo(0, editorText.scrollY)
             }
         }
+    }
+
+    // ── Quick-symbol row (MT Manager style: one tap inserts at the caret) ──────
+
+    /** Web: none — native-only convenience row above the keyboard for symbols that are slow to reach. */
+    private fun buildSymbolBar() {
+        val keys = listOf(
+            "Tab" to "\t", "→" to "    ", "/" to "/", "\\" to "\\", "|" to "|",
+            "+" to "+", "-" to "-", "*" to "*", "=" to "=", "_" to "_",
+            "<" to "<", ">" to ">", "(" to "(", ")" to ")", "{" to "{", "}" to "}",
+            "[" to "[", "]" to "]", "\"" to "\"", "'" to "'", ";" to ";", ":" to ":", "#" to "#"
+        )
+        val inflater = android.view.LayoutInflater.from(act)
+        for ((label, insert) in keys) {
+            val key = inflater.inflate(R.layout.item_symbol_key, symbolBar, false) as TextView
+            key.text = label
+            key.setOnClickListener { insertAtCaret(insert) }
+            symbolBar.addView(key)
+        }
+    }
+
+    /** Replaces the current selection (a bare caret counts as an empty selection) with [text]. */
+    private fun insertAtCaret(text: String) {
+        if (!loaded || manualReadOnly) return
+        val editable = editorText.text ?: return
+        val s = editorText.selectionStart.coerceIn(0, editable.length)
+        val e = editorText.selectionEnd.coerceIn(0, editable.length)
+        editable.replace(minOf(s, e), maxOf(s, e), text)
+        editorText.setSelection(minOf(s, e) + text.length)
     }
 }

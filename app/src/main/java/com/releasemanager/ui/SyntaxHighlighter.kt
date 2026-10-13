@@ -19,16 +19,17 @@ object SyntaxHighlighter {
     fun languageFor(fileName: String): Lang {
         return when (fileName.substringAfterLast('.', "").lowercase()) {
             "kt", "kts", "gradle" -> Lang.KOTLIN
-            "java" -> Lang.JAVA
-            "js", "jsx", "mjs", "cjs", "ts", "tsx" -> Lang.JS
-            "json", "webmanifest" -> Lang.JSON
-            "xml", "html", "htm", "svg" -> Lang.XML
-            "py" -> Lang.PYTHON
-            "sh", "bash", "zsh" -> Lang.SHELL
+            "java", "groovy" -> Lang.JAVA
+            "js", "jsx", "mjs", "cjs", "ts", "tsx", "vue", "svelte", "astro" -> Lang.JS
+            "json", "json5", "jsonc", "webmanifest" -> Lang.JSON
+            "xml", "html", "htm", "xhtml", "svg", "plist", "resx", "manifest" -> Lang.XML
+            "py", "pyw", "pyi" -> Lang.PYTHON
+            "sh", "bash", "zsh", "fish" -> Lang.SHELL
             "yml", "yaml" -> Lang.YAML
-            "md", "markdown" -> Lang.MARKDOWN
-            "css", "scss" -> Lang.CSS
-            "c", "h", "cpp", "hpp", "cc", "cs", "m", "mm", "swift", "go", "rs", "php", "rb", "dart" -> Lang.CLIKE
+            "md", "markdown", "mdx" -> Lang.MARKDOWN
+            "css", "scss", "sass", "less" -> Lang.CSS
+            "c", "h", "cpp", "cc", "cxx", "hpp", "hh", "cs", "m", "mm", "swift", "go", "rs",
+            "php", "phtml", "rb", "erb", "dart", "lua", "scala", "zig", "v", "sol" -> Lang.CLIKE
             else -> Lang.NONE
         }
     }

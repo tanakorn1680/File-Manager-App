@@ -127,4 +127,23 @@
         <item name="android:clickable">true</item>
         <item name="android:focusable">true</item>
     </style>
+    <!-- ── Connect screen hero (referenced by layout/screen_connect.xml) ──────── -->
+    <style name="App.HeroTitle" parent="">
+        <item name="android:textColor">@color/text_primary</item>
+        <item name="android:textSize">22sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:gravity">center</item>
+    </style>
+
+    <style name="App.HeroSubtitle" parent="">
+        <item name="android:textColor">@color/text_muted</item>
+        <item name="android:textSize">14sp</item>
+        <item name="android:gravity">center</item>
+        <item name="android:lineSpacingMultiplier">1.15</item>
+    </style>
+
+    <style name="ShapeAppearanceOverlay.App.Logo" parent="">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">22dp</item>
+    </style>
 </resources>

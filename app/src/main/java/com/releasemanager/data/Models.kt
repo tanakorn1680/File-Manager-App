@@ -63,6 +63,17 @@ data class WorkflowRun(
     val headSha: String = ""    // commit the run was triggered for
 )
 
+/** One workflow of a repository (GET /repos/:repo/actions/workflows): a file in .github/workflows. */
+data class Workflow(
+    val id: Long,
+    val name: String,
+    val path: String,       // ".github/workflows/build-apk.yml"
+    val state: String       // active | disabled_manually | disabled_inactivity | ...
+) {
+    val active: Boolean get() = state == "active"
+    val fileName: String get() = path.substringAfterLast('/')
+}
+
 /** A file bundle a run uploaded with actions/upload-artifact; downloads as a ZIP. */
 data class RunArtifact(
     val id: Long,

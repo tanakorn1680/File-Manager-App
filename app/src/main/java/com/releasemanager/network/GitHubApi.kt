@@ -13,6 +13,7 @@ import com.releasemanager.data.ReleaseAsset
 import com.releasemanager.data.RepoRef
 import com.releasemanager.data.RunArtifact
 import com.releasemanager.data.UploadItem
+import com.releasemanager.data.Workflow
 import com.releasemanager.data.WorkflowJob
 import com.releasemanager.data.WorkflowRun
 import com.releasemanager.data.WorkflowStep
@@ -652,9 +653,47 @@ class GitHubApi(private val token: String) {
         }
     }
 
-    /** Latest workflow runs of the repository, newest first. */
-    suspend fun listWorkflowRuns(repo: String, perPage: Int = 30): List<WorkflowRun> {
-        val req = authedRequest("https://api.github.com/repos/$repo/actions/runs?per_page=$perPage").get().build()
+    /** Workflows of the repository (the files in .github/workflows), in the order GitHub lists them. */
+    suspend fun listWorkflows(repo: String): List<Workflow> {
+        val req = authedRequest("https://api.github.com/repos/$repo/actions/workflows?per_page=100").get().build()
+        val json = execute(req) ?: throw GitHubApiException("Empty response from GitHub", 0)
+        val arr = json.optJSONArray("workflows") ?: JSONArray()
+        return (0 until arr.length()).map { i ->
+            val w = arr.getJSONObject(i)
+            Workflow(
+                id = w.getLong("id"),
+                name = optStr(w, "name") ?: "Workflow",
+                path = optStr(w, "path") ?: "",
+                state = optStr(w, "state") ?: "active"
+            )
+        }
+    }
+
+    /**
+     * What the workflow file at [ref] says about running it by hand: whether it has a `workflow_dispatch`
+     * trigger and which inputs it asks for. (The REST API does not expose inputs, so the file is read.)
+     */
+    suspend fun getDispatchInfo(repo: String, path: String, ref: String): DispatchInfo =
+        WorkflowYaml.dispatchInfo(getFile(repo, path, ref).text)
+
+    /** "Run workflow": starts [workflowId] on [ref] (a branch or tag) with the given input values. GitHub answers 204. */
+    suspend fun dispatchWorkflow(repo: String, workflowId: Long, ref: String, inputs: Map<String, String>) {
+        val payload = JSONObject().put("ref", ref)
+        if (inputs.isNotEmpty()) {
+            val o = JSONObject()
+            inputs.forEach { (k, v) -> o.put(k, v) }
+            payload.put("inputs", o)
+        }
+        call(
+            authedRequest("https://api.github.com/repos/$repo/actions/workflows/$workflowId/dispatches")
+                .post(jsonBody(payload)).build()
+        )
+    }
+
+    /** Latest workflow runs of the repository (or of one workflow), newest first. */
+    suspend fun listWorkflowRuns(repo: String, perPage: Int = 30, workflowId: Long? = null): List<WorkflowRun> {
+        val path = if (workflowId == null) "actions/runs" else "actions/workflows/$workflowId/runs"
+        val req = authedRequest("https://api.github.com/repos/$repo/$path?per_page=$perPage").get().build()
         val json = execute(req) ?: throw GitHubApiException("Empty response from GitHub", 0)
         val arr = json.optJSONArray("workflow_runs") ?: JSONArray()
         return (0 until arr.length()).map { i -> parseRun(arr.getJSONObject(i)) }

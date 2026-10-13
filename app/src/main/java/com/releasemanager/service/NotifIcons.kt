@@ -18,8 +18,23 @@ object NotifIcons {
     private fun side(ctx: Context): Int =
         ctx.resources.getDimensionPixelSize(android.R.dimen.notification_large_icon_width).coerceAtLeast(96)
 
+    // Built once: a progress notification is re-posted every second and must not decode and draw a bitmap each time
+    @Volatile private var logoCache: Bitmap? = null
+    @Volatile private var okCache: Bitmap? = null
+    @Volatile private var failCache: Bitmap? = null
+
+    fun logo(ctx: Context): Bitmap = logoCache ?: drawLogo(ctx.applicationContext).also { logoCache = it }
+
+    fun result(ctx: Context, ok: Boolean): Bitmap {
+        val cached = if (ok) okCache else failCache
+        if (cached != null) return cached
+        val built = drawResult(ctx.applicationContext, ok)
+        if (ok) okCache = built else failCache = built
+        return built
+    }
+
     /** The app logo with rounded corners (same 22 % as the logo on the connect screen). */
-    fun logo(ctx: Context): Bitmap {
+    private fun drawLogo(ctx: Context): Bitmap {
         val s = side(ctx)
         val src = BitmapFactory.decodeResource(ctx.resources, R.drawable.logo_app)
         val out = Bitmap.createBitmap(s, s, Bitmap.Config.ARGB_8888)
@@ -34,8 +49,8 @@ object NotifIcons {
     }
 
     /** The logo plus a round badge in the bottom-right corner: green with a white check, or red with a white cross. */
-    fun result(ctx: Context, ok: Boolean): Bitmap {
-        val out = logo(ctx)
+    private fun drawResult(ctx: Context, ok: Boolean): Bitmap {
+        val out = logo(ctx).copy(Bitmap.Config.ARGB_8888, true)
         val s = out.width.toFloat()
         val c = Canvas(out)
         val r = s * 0.23f

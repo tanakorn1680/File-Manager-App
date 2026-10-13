@@ -230,9 +230,13 @@ class ReleaseDetailActivity : AppCompatActivity() {
 
     /** Android 13+: without this permission the progress notification of a background upload is not shown. */
     private fun requestNotificationPermission() {
-        if (Build.VERSION.SDK_INT < 33) return
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
-        notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            return
+        }
+        BatteryExemption.askOnce(this)
     }
 
     /** Exact size in bytes as the file provider reports it, or -1 when it does not. */

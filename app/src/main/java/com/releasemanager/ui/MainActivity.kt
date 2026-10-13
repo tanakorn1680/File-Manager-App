@@ -75,13 +75,18 @@ class MainActivity : AppCompatActivity() {
         callback?.invoke(uri)
     }
 
-    private val notifPermLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    // The battery dialog comes after the notification one, never on top of it
+    private val notifPermLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { BatteryExemption.askOnce(this) }
 
     /** Android 13+: without this permission the progress notification of a background transfer is not shown. */
     fun requestNotificationPermission() {
-        if (Build.VERSION.SDK_INT < 33) return
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
-        notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            return
+        }
+        BatteryExemption.askOnce(this)
     }
 
     // The Uris the pickers return are only readable while this Activity lives, unless a persistable grant is

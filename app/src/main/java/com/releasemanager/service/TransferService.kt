@@ -5,10 +5,13 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.wifi.WifiManager
 import android.os.IBinder
 import android.os.PowerManager
+import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
@@ -42,6 +45,9 @@ class TransferService : Service(), TransferManager.Listener {
         private const val WAKE_TAG = "com.releasemanager:transfer"
         private const val WAKE_TIMEOUT_MS = 6 * 60 * 60 * 1000L
 
+        /** The system's notification queue is not a progress bar: one update per second is plenty. */
+        private const val NOTIFY_GAP_MS = 1000L
+
         const val ACTION_CANCEL = "com.releasemanager.action.CANCEL_TRANSFER"
         const val EXTRA_ID = "transfer_id"
 
@@ -51,6 +57,8 @@ class TransferService : Service(), TransferManager.Listener {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private lateinit var nm: NotificationManager
     private var wakeLock: PowerManager.WakeLock? = null
+    private var wifiLock: WifiManager.WifiLock? = null
+    private val lastNotified = HashMap<Int, Long>()
     private var fgId = NO_ID
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -122,8 +130,13 @@ class TransferService : Service(), TransferManager.Listener {
     /** Main thread: a progress step, or the end of a transfer. */
     override fun onTransferChanged(t: Transfer) {
         if (t.isRunning) {
-            nm.notify(notifId(t), progressNotification(t))
+            val now = SystemClock.elapsedRealtime()
+            if (now - (lastNotified[t.id] ?: 0L) >= NOTIFY_GAP_MS) {
+                lastNotified[t.id] = now
+                nm.notify(notifId(t), progressNotification(t))
+            }
         } else {
+            lastNotified.remove(t.id)
             finish(t)
         }
     }
@@ -172,6 +185,22 @@ class TransferService : Service(), TransferManager.Listener {
         } catch (e: Exception) {
             Log.w(TAG, "wakelock: ${e.message}")
         }
+        acquireWifiLock()
+    }
+
+    /** Keeps Wi-Fi out of its power-save mode (which throttles throughput when the screen is off). */
+    @Suppress("DEPRECATION")
+    private fun acquireWifiLock() {
+        if (wifiLock?.isHeld == true) return
+        try {
+            val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return
+            wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, WAKE_TAG).apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "wifilock: ${e.message}")
+        }
     }
 
     private fun releaseWakeLock() {
@@ -181,6 +210,12 @@ class TransferService : Service(), TransferManager.Listener {
             Log.w(TAG, "wakelock release: ${e.message}")
         }
         wakeLock = null
+        try {
+            wifiLock?.let { if (it.isHeld) it.release() }
+        } catch (e: Exception) {
+            Log.w(TAG, "wifilock release: ${e.message}")
+        }
+        wifiLock = null
     }
 
     // ── Notifications ────────────────────────────────────────────────────────

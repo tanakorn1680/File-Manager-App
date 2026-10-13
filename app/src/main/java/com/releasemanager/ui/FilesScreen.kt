@@ -87,6 +87,10 @@ class FilesScreen(private val ctx: AppContext) {
         root.findViewById<ImageButton>(R.id.btnReleases).setOnClickListener { ctx.releases.enter() }
         root.findViewById<ImageButton>(R.id.btnActions).setOnClickListener { ctx.actions.enter() }
         root.findViewById<View>(R.id.btnHistory).setOnClickListener { ctx.history.enter() }
+        root.findViewById<View>(R.id.btnDownloadRepo).setOnClickListener {
+            val repo = state.currentRepo ?: return@setOnClickListener
+            ctx.downloadRepoZip(repo, state.currentBranch)
+        }
         root.findViewById<ImageButton>(R.id.btnSelectMode).setOnClickListener {
             if (state.selectMode) {
                 exitSelectMode()

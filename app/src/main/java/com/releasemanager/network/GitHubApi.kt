@@ -331,6 +331,25 @@ class GitHubApi(private val token: String) {
         }
     }
 
+    /**
+     * Streams the repository's source at [ref] (a branch name) as a ZIP into [sink] — GitHub's own
+     * "Download ZIP". GitHub answers with a redirect to codeload.github.com, which OkHttp follows
+     * (dropping the Authorization header for the other host); private repositories work because the
+     * redirect URL carries its own short-lived token. Does not close [sink].
+     * The ZIP holds everything inside one top-level folder, "owner-repo-<commit>/".
+     */
+    suspend fun downloadRepoZip(
+        repo: String,
+        ref: String,
+        sink: OutputStream,
+        onProgress: ((done: Long, total: Long) -> Unit)? = null
+    ) {
+        withContext(Dispatchers.IO) {
+            val req = authedRequest("https://api.github.com/repos/$repo/zipball/${encodePath(ref)}").get().build()
+            streamResponse(req, sink, onProgress)
+        }
+    }
+
     /** Sends [req] and copies the body into [sink], reporting progress and honouring cancellation. */
     private suspend fun streamResponse(req: Request, sink: OutputStream, onProgress: ((Long, Long) -> Unit)?) {
         client.newCall(req).await().use { resp ->

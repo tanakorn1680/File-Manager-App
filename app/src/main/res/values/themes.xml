@@ -46,7 +46,7 @@
         <item name="android:navigationBarColor">@color/transparent</item>
     </style>
 
-    <!-- Web .sheet / .overlay: bottom sheet with 20px top corners -->
+    <!-- Web .sheet / .overlay: bottom sheet with 24dp top corners -->
     <style name="Theme.App.BottomSheetDialog" parent="Theme.MaterialComponents.BottomSheetDialog">
         <item name="bottomSheetStyle">@style/Widget.App.BottomSheet</item>
         <item name="colorSurface">@color/surface</item>
@@ -60,8 +60,8 @@
 
     <style name="ShapeAppearanceOverlay.App.BottomSheet" parent="">
         <item name="cornerFamily">rounded</item>
-        <item name="cornerSizeTopLeft">20dp</item>
-        <item name="cornerSizeTopRight">20dp</item>
+        <item name="cornerSizeTopLeft">24dp</item>
+        <item name="cornerSizeTopRight">24dp</item>
         <item name="cornerSizeBottomLeft">0dp</item>
         <item name="cornerSizeBottomRight">0dp</item>
     </style>

@@ -29,6 +29,7 @@ class ReposScreen(private val ctx: AppContext) {
     private val inputSearch: EditText = root.findViewById(R.id.inputSearch)
     private val list: RecyclerView = root.findViewById(R.id.listRepos)
     private val stateView = StateView(root)
+    private val textRepoCount: TextView = root.findViewById(R.id.textRepoCount)
 
     private val adapter = RepoAdapter(
         onOpen = { openRepo(it) },
@@ -68,6 +69,7 @@ class ReposScreen(private val ctx: AppContext) {
         loadJob?.cancel()
         inputSearch.setText("")
         adapter.submitList(emptyList())
+        textRepoCount.visibility = View.GONE
     }
 
     // ── Loading / rendering ──────────────────────────────────────────────────
@@ -90,6 +92,13 @@ class ReposScreen(private val ctx: AppContext) {
             it.fullName.lowercase().contains(q) || (it.description ?: "").lowercase().contains(q)
         }
         adapter.submitList(filtered.sortedForDisplay(state.repoSortKey, state.repoSortAsc))
+        val total = state.repos.size
+        textRepoCount.text = when {
+            q.isNotEmpty() -> "${filtered.size} of $total repositories"
+            total == 1 -> "1 repository"
+            else -> "$total repositories"
+        }
+        textRepoCount.visibility = View.VISIBLE
         if (filtered.isEmpty()) stateView.showEmpty("No repositories found.") else stateView.hide()
     }
 
@@ -134,6 +143,10 @@ class ReposScreen(private val ctx: AppContext) {
             repo.fullName.repoShortName(),
             listOf(
                 Dialogs.SheetItem("Open", R.drawable.ic_arrow_right, onClick = { openRepo(repo) }),
+                Dialogs.SheetItem(
+                    "Download as ZIP", R.drawable.ic_download,
+                    onClick = { ctx.downloadRepoZip(repo.fullName, repo.defaultBranch) }
+                ),
                 Dialogs.SheetItem(
                     "Change Visibility", R.drawable.ic_eye,
                     onClick = { confirmVisibility(repo) }

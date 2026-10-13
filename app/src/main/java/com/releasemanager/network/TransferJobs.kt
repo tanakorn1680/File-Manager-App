@@ -342,6 +342,65 @@ object DownloadJobs {
         return TransferOutcome("Downloaded $n files")
     }
 
+    /**
+     * The whole repository (one branch) as a single ZIP.
+     *
+     * [wrapFolder] = true saves GitHub's own layout, everything inside one "owner-repo-<commit>/" folder.
+     * false repacks it so the files sit at the ZIP's root: it extracts straight into whatever folder the
+     * user picks, and goes back through Upload ZIP without an extra folder level.
+     * Progress: 0–70 % downloading, 70–100 % repacking (the root-level layout only).
+     */
+    suspend fun repoZip(
+        api: GitHubApi, cr: ContentResolver, cacheDir: File, uri: Uri,
+        repo: String, branch: String, wrapFolder: Boolean, fileName: String,
+        progress: TransferProgress
+    ): TransferOutcome {
+        writeTo(cr, uri) { out ->
+            if (wrapFolder) {
+                api.downloadRepoZip(repo, branch, out) { done, total -> progress.bytes("Downloading", done, total) }
+            } else {
+                val temp = File(cacheDir, "repo_zip_${System.currentTimeMillis()}.zip")
+                try {
+                    withContext(Dispatchers.IO) {
+                        temp.outputStream().buffered().use { sink ->
+                            api.downloadRepoZip(repo, branch, sink) { done, total ->
+                                progress.bytes("Downloading", done, total, span = 0.7f)
+                            }
+                        }
+                    }
+                    repackWithoutRoot(temp, out, progress)
+                } finally {
+                    withContext(NonCancellable + Dispatchers.IO) { temp.delete() }
+                }
+            }
+        }
+        return TransferOutcome("Saved $fileName")
+    }
+
+    /** Copies [src] into [out], dropping the single top-level folder GitHub wraps every entry in. */
+    private suspend fun repackWithoutRoot(src: File, out: OutputStream, progress: TransferProgress) {
+        withContext(Dispatchers.IO) {
+            ZipFile(src).use { zip ->
+                val entries = zip.entries().toList()
+                val root = entries.firstOrNull { it.name.contains('/') }?.name?.substringBefore('/').orEmpty()
+                val prefix = if (root.isEmpty()) "" else "$root/"
+                val total = entries.size
+                ZipOutputStream(out.buffered()).use { dst ->
+                    for ((i, entry) in entries.withIndex()) {
+                        val name = if (prefix.isNotEmpty() && entry.name.startsWith(prefix)) entry.name.substring(prefix.length) else entry.name
+                        if (name.isEmpty()) continue // the wrapper folder itself
+                        if (i % 20 == 0) progress.update(0.7f + 0.3f * i / total, "Packing ${i + 1}/$total…")
+                        val copy = ZipEntry(name)
+                        if (entry.time != -1L) copy.time = entry.time
+                        dst.putNextEntry(copy)
+                        if (!entry.isDirectory) zip.getInputStream(entry).use { copyStream(it, dst) }
+                        dst.closeEntry()
+                    }
+                }
+            }
+        }
+    }
+
     suspend fun runLogs(
         api: GitHubApi, cr: ContentResolver, uri: Uri,
         repo: String, runId: Long, fileName: String,

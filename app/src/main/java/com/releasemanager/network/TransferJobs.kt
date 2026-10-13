@@ -28,10 +28,10 @@ import java.util.zip.ZipOutputStream
  */
 
 /** A file the user picked for upload. */
-class PickedSource(val uri: Uri, val name: String, val size: Long = -1L)
+class PickedSource(val uri: Uri, val name: String)
 
 /** One file to put into the clone: [open] is called on a background thread. */
-class PushSource(val path: String, val size: Long = -1L, val open: () -> InputStream)
+class PushSource(val path: String, val open: () -> InputStream)
 
 /**
  * Document Uris from the system pickers are only readable while the Activity that received them is alive,
@@ -122,15 +122,9 @@ object ZipScan {
 
 // ── Uploads ──────────────────────────────────────────────────────────────────────────────────────
 
-/** Where each stage sits on the 0..1 bar of a push; JGit's own percentages restart for every task. */
-private const val PART_CLONE_END = 0.10f   // 0.00–0.10  clone: "Receiving objects"
-private const val PART_COPY_END = 0.20f    // 0.10–0.20  copying the files in, by bytes
-private const val PART_PUSH_START = 0.25f  // 0.20–0.25  commit, then 0.25–1.00 "Writing objects"
-
 /**
- * Clone → copy every source in → one commit → one push. The bar only ever moves forward, and shows
- * "working" (unknown length) whenever there is no honest number — the clone before it starts receiving,
- * and a push of only a few large objects, where git reports no progress inside an object.
+ * Clone → copy every source in → one commit → one push. Progress: 0–50 % copying, 50–100 % pushing;
+ * the clone is shown as "unknown length".
  */
 suspend fun pushSources(
     api: GitHubApi,
@@ -142,38 +136,17 @@ suspend fun pushSources(
     progress: TransferProgress
 ) {
     val total = sources.size
-    val bytesKnown = total > 0 && sources.all { it.size >= 0 }
-    val totalBytes = if (bytesKnown) sources.sumOf { it.size } else 0L
-    var high = 0f
-    fun forward(fraction: Float, label: String) {
-        high = maxOf(high, fraction.coerceIn(0f, 1f))
-        progress.update(high, label)
-    }
-
     progress.update(-1f, "Cloning $repo…")
     val session = api.openGitSession(cacheDir, repo, branch) { phase, text, pct ->
-        when {
-            phase == GitPhase.CLONE_DATA && pct >= 0 -> forward(PART_CLONE_END * pct / 100f, text)
-            phase == GitPhase.PUSH && pct >= 0 -> forward(PART_PUSH_START + (1f - PART_PUSH_START) * pct / 100f, text)
-            phase == GitPhase.PUSH -> progress.update(-1f, text)
-            else -> progress.label(text)
-        }
+        if (phase == GitPhase.PUSH && pct >= 0) progress.update(0.5f + pct / 200f, text) else progress.label(text)
     }
     try {
-        var copied = 0L
         for ((i, src) in sources.withIndex()) {
             progress.item(i, "Copying ${i + 1}/$total…")
-            session.addFile(src.path, onBytes = { n ->
-                copied += n
-                val share = if (bytesKnown && totalBytes > 0) copied.toFloat() / totalBytes else i.toFloat() / total
-                val detail = if (bytesKnown && totalBytes > 0) " — ${formatSize(copied)} / ${formatSize(totalBytes)}" else ""
-                forward(PART_CLONE_END + (PART_COPY_END - PART_CLONE_END) * share, "Copying ${i + 1}/$total$detail")
-            }, open = src.open)
-            if (!(bytesKnown && totalBytes > 0)) {
-                forward(PART_CLONE_END + (PART_COPY_END - PART_CLONE_END) * (i + 1) / total, "Copying ${i + 1}/$total…")
-            }
+            progress.update(i.toFloat() / total * 0.5f, "Copying ${i + 1}/$total…")
+            session.addFile(src.path, src.open)
         }
-        forward(PART_COPY_END, "Preparing commit…")
+        progress.update(0.5f, "Preparing commit…")
         session.commitAndPush(message)
         progress.update(1f, "Done")
     } finally {
@@ -204,7 +177,7 @@ object UploadJobs {
     ): TransferOutcome {
         try {
             val sources = files.map { f ->
-                PushSource(if (dir.isNotEmpty()) "$dir/${f.name}" else f.name, f.size) {
+                PushSource(if (dir.isNotEmpty()) "$dir/${f.name}" else f.name) {
                     cr.openInputStream(f.uri) ?: throw IOException("Could not read \"${f.name}\"")
                 }
             }
@@ -248,7 +221,7 @@ object UploadJobs {
                 val tooBig = targets.firstOrNull { it.entry.size > GITHUB_MAX_FILE_BYTES }
                 if (tooBig != null) throw IOException(tooLargeMessage(tooBig.name, tooBig.entry.size))
 
-                val sources = targets.map { t -> PushSource(t.path, t.entry.size) { zip.getInputStream(t.entry) } }
+                val sources = targets.map { t -> PushSource(t.path) { zip.getInputStream(t.entry) } }
                 pushSources(api, cacheDir, repo, branch, message, sources, progress)
 
                 val skipped = listOfNotNull(
@@ -367,65 +340,6 @@ object DownloadJobs {
             }
         }
         return TransferOutcome("Downloaded $n files")
-    }
-
-    /**
-     * The whole repository (one branch) as a single ZIP.
-     *
-     * [wrapFolder] = true saves GitHub's own layout, everything inside one "owner-repo-<commit>/" folder.
-     * false repacks it so the files sit at the ZIP's root: it extracts straight into whatever folder the
-     * user picks, and goes back through Upload ZIP without an extra folder level.
-     * Progress: 0–70 % downloading, 70–100 % repacking (the root-level layout only).
-     */
-    suspend fun repoZip(
-        api: GitHubApi, cr: ContentResolver, cacheDir: File, uri: Uri,
-        repo: String, branch: String, wrapFolder: Boolean, fileName: String,
-        progress: TransferProgress
-    ): TransferOutcome {
-        writeTo(cr, uri) { out ->
-            if (wrapFolder) {
-                api.downloadRepoZip(repo, branch, out) { done, total -> progress.bytes("Downloading", done, total) }
-            } else {
-                val temp = File(cacheDir, "repo_zip_${System.currentTimeMillis()}.zip")
-                try {
-                    withContext(Dispatchers.IO) {
-                        temp.outputStream().buffered().use { sink ->
-                            api.downloadRepoZip(repo, branch, sink) { done, total ->
-                                progress.bytes("Downloading", done, total, span = 0.7f)
-                            }
-                        }
-                    }
-                    repackWithoutRoot(temp, out, progress)
-                } finally {
-                    withContext(NonCancellable + Dispatchers.IO) { temp.delete() }
-                }
-            }
-        }
-        return TransferOutcome("Saved $fileName")
-    }
-
-    /** Copies [src] into [out], dropping the single top-level folder GitHub wraps every entry in. */
-    private suspend fun repackWithoutRoot(src: File, out: OutputStream, progress: TransferProgress) {
-        withContext(Dispatchers.IO) {
-            ZipFile(src).use { zip ->
-                val entries = zip.entries().toList()
-                val root = entries.firstOrNull { it.name.contains('/') }?.name?.substringBefore('/').orEmpty()
-                val prefix = if (root.isEmpty()) "" else "$root/"
-                val total = entries.size
-                ZipOutputStream(out.buffered()).use { dst ->
-                    for ((i, entry) in entries.withIndex()) {
-                        val name = if (prefix.isNotEmpty() && entry.name.startsWith(prefix)) entry.name.substring(prefix.length) else entry.name
-                        if (name.isEmpty()) continue // the wrapper folder itself
-                        if (i % 20 == 0) progress.update(0.7f + 0.3f * i / total, "Packing ${i + 1}/$total…")
-                        val copy = ZipEntry(name)
-                        if (entry.time != -1L) copy.time = entry.time
-                        dst.putNextEntry(copy)
-                        if (!entry.isDirectory) zip.getInputStream(entry).use { copyStream(it, dst) }
-                        dst.closeEntry()
-                    }
-                }
-            }
-        }
     }
 
     suspend fun runLogs(

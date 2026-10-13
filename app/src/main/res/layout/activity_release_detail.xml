@@ -193,9 +193,7 @@
                         android:id="@+id/progressUpload"
                         style="?android:attr/progressBarStyleHorizontal"
                         android:layout_width="match_parent"
-                        android:layout_height="6dp"
-                        android:indeterminateTint="@color/brand_end"
-                        android:indeterminateTintMode="src_in"
+                        android:layout_height="4dp"
                         android:max="100"
                         android:progressDrawable="@drawable/progress_bar" />
 

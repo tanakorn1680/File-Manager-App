@@ -175,7 +175,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="28dp"
                 android:layout_marginStart="4dp"
-                android:layout_marginEnd="6dp"
+                android:layout_marginEnd="12dp"
                 android:background="@drawable/bg_branch_btn"
                 android:clickable="true"
                 android:focusable="true"
@@ -197,38 +197,6 @@
                     android:layout_marginStart="6dp"
                     android:fontFamily="sans-serif-medium"
                     android:text="History"
-                    android:textColor="@color/text_primary"
-                    android:textSize="12sp" />
-            </LinearLayout>
-
-            <!-- Download the whole repository (current branch) as a ZIP -->
-            <LinearLayout
-                android:id="@+id/btnDownloadRepo"
-                android:layout_width="wrap_content"
-                android:layout_height="28dp"
-                android:layout_marginEnd="12dp"
-                android:background="@drawable/bg_branch_btn"
-                android:clickable="true"
-                android:contentDescription="Download repository as ZIP"
-                android:focusable="true"
-                android:gravity="center_vertical"
-                android:orientation="horizontal"
-                android:paddingStart="10dp"
-                android:paddingEnd="10dp">
-
-                <ImageView
-                    android:layout_width="14dp"
-                    android:layout_height="14dp"
-                    android:importantForAccessibility="no"
-                    android:src="@drawable/ic_download"
-                    android:tint="@color/text_muted" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="6dp"
-                    android:fontFamily="sans-serif-medium"
-                    android:text="ZIP"
                     android:textColor="@color/text_primary"
                     android:textSize="12sp" />
             </LinearLayout>
@@ -258,7 +226,7 @@
         android:layout_marginEnd="20dp"
         android:layout_marginBottom="24dp"
         android:contentDescription="Add"
-        app:backgroundTint="@color/accent_emphasis"
+        app:backgroundTint="@color/accent"
         app:borderWidth="0dp"
         app:fabSize="normal"
         app:maxImageSize="26dp"

@@ -173,7 +173,6 @@ class ReleaseDetailActivity : AppCompatActivity() {
 
         dropZone.visibility = View.GONE
         uploadProgressGroup.visibility = View.VISIBLE
-        progressUpload.isIndeterminate = false
         progressUpload.progress = 0
         textUploadLabel.text = "Preparing $fileName…"
 
@@ -196,13 +195,7 @@ class ReleaseDetailActivity : AppCompatActivity() {
 
     private fun showProgress(t: Transfer) {
         textUploadLabel.text = if (t.label.isBlank()) "Uploading ${t.title}…" else "${t.title}: ${t.label}"
-        // No length known yet (copying, waiting for GitHub): show "working" instead of a number that is not true
-        if (t.fraction >= 0f) {
-            progressUpload.isIndeterminate = false
-            progressUpload.progress = (t.fraction * 100).toInt().coerceIn(0, 100)
-        } else {
-            progressUpload.isIndeterminate = true
-        }
+        if (t.fraction >= 0f) progressUpload.progress = (t.fraction * 100).toInt().coerceIn(0, 100)
     }
 
     /** Progress and the final result of the background upload, while this screen is open. */

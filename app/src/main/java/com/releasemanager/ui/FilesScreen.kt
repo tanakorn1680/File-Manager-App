@@ -87,10 +87,6 @@ class FilesScreen(private val ctx: AppContext) {
         root.findViewById<ImageButton>(R.id.btnReleases).setOnClickListener { ctx.releases.enter() }
         root.findViewById<ImageButton>(R.id.btnActions).setOnClickListener { ctx.actions.enter() }
         root.findViewById<View>(R.id.btnHistory).setOnClickListener { ctx.history.enter() }
-        root.findViewById<View>(R.id.btnDownloadRepo).setOnClickListener {
-            val repo = state.currentRepo ?: return@setOnClickListener
-            ctx.downloadRepoZip(repo, state.currentBranch)
-        }
         root.findViewById<ImageButton>(R.id.btnSelectMode).setOnClickListener {
             if (state.selectMode) {
                 exitSelectMode()
@@ -798,7 +794,7 @@ class FilesScreen(private val ctx: AppContext) {
                     // One clone, one commit, one push for all staged files (like Termux)
                     val sources = toUpsert.map { sf ->
                         val disk = sf.diskPath
-                        PushSource(sf.path, if (disk != null) File(disk).length() else sf.content.orEmpty().length * 3L / 4) {
+                        PushSource(sf.path) {
                             if (disk != null) File(disk).inputStream()
                             else ByteArrayInputStream(Base64.decode(sf.content.orEmpty(), Base64.DEFAULT))
                         }

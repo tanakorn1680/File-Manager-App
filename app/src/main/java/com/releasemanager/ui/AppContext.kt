@@ -1,10 +1,8 @@
 package com.releasemanager.ui
 
 import androidx.lifecycle.lifecycleScope
-import com.releasemanager.R
 import com.releasemanager.data.AppState
 import com.releasemanager.data.TokenStore
-import com.releasemanager.network.DownloadJobs
 import com.releasemanager.network.GitHubApi
 import com.releasemanager.service.Transfer
 import com.releasemanager.service.TransferKind
@@ -106,49 +104,6 @@ class AppContext(
     fun startDownload(title: String, block: suspend (TransferProgress) -> TransferOutcome): Transfer {
         toast.show("Downloading $title — progress is in the notification")
         return startTransfer(TransferKind.DOWNLOAD, title, null, { toastResult(it) }, block)
-    }
-
-    /**
-     * "Download as ZIP" for a whole repository: asks for the ZIP layout, then where to save it, then
-     * downloads [branch] in the background (progress notification, survives closing the app).
-     */
-    fun downloadRepoZip(repoFullName: String, branch: String) {
-        val name = repoFullName.repoShortName()
-        val ref = branch.ifEmpty { "main" }
-        Dialogs.sheet(
-            activity, "Download $name as ZIP",
-            listOf(
-                Dialogs.SheetItem(
-                    "Files at the root", R.drawable.ic_archive,
-                    sub = "No wrapper folder — extracts straight into any folder",
-                    iconBoxBgRes = R.drawable.bg_edit_mode_icon,
-                    iconTintRes = R.color.accent,
-                    onClick = { saveRepoZip(repoFullName, ref, wrapFolder = false) }
-                ),
-                Dialogs.SheetItem(
-                    "Same as GitHub", R.drawable.ic_folder,
-                    sub = "Everything inside one owner-repo-commit folder",
-                    iconBoxBgRes = R.drawable.bg_edit_mode_icon_stage,
-                    iconTintRes = R.color.warning_text,
-                    onClick = { saveRepoZip(repoFullName, ref, wrapFolder = true) }
-                )
-            )
-        )
-    }
-
-    private fun saveRepoZip(repoFullName: String, ref: String, wrapFolder: Boolean) {
-        val client = api ?: return
-        val shortName = repoFullName.repoShortName()
-        val fileName = "$shortName-${ref.replace('/', '-')}.zip"
-        activity.createDocument(fileName, "application/zip") { uri ->
-            if (uri == null) return@createDocument
-            // Copied into locals: the transfer must not touch the Activity, a View or the app state
-            val cr = activity.applicationContext.contentResolver
-            val cacheDir = activity.cacheDir
-            startDownload(fileName) { progress ->
-                DownloadJobs.repoZip(client, cr, cacheDir, uri, repoFullName, ref, wrapFolder, fileName, progress)
-            }
-        }
     }
 
     /** Toast for the final state of a transfer; progress steps are ignored. */

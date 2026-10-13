@@ -3,14 +3,14 @@
     <style name="Theme.ReleaseManager" parent="Theme.MaterialComponents.NoActionBar">
         <item name="colorPrimary">@color/accent</item>
         <item name="colorPrimaryVariant">@color/accent</item>
-        <item name="colorOnPrimary">@color/bg</item>
+        <item name="colorOnPrimary">@color/white</item>
         <item name="colorSecondary">@color/success</item>
         <item name="colorOnSecondary">@color/white</item>
         <item name="colorSurface">@color/surface</item>
         <item name="colorOnSurface">@color/text_primary</item>
         <item name="colorError">@color/danger</item>
 
-        <!-- Caret / selection handles / activated controls use the light-gray accent -->
+        <!-- Web accent-color / caret / selection handles are the accent blue -->
         <item name="colorAccent">@color/accent</item>
         <item name="colorControlActivated">@color/accent</item>
         <item name="colorControlNormal">@color/text_muted</item>
@@ -46,7 +46,7 @@
         <item name="android:navigationBarColor">@color/transparent</item>
     </style>
 
-    <!-- Web .sheet / .overlay: bottom sheet with 24dp top corners -->
+    <!-- Web .sheet / .overlay: bottom sheet with 20px top corners -->
     <style name="Theme.App.BottomSheetDialog" parent="Theme.MaterialComponents.BottomSheetDialog">
         <item name="bottomSheetStyle">@style/Widget.App.BottomSheet</item>
         <item name="colorSurface">@color/surface</item>
@@ -60,8 +60,8 @@
 
     <style name="ShapeAppearanceOverlay.App.BottomSheet" parent="">
         <item name="cornerFamily">rounded</item>
-        <item name="cornerSizeTopLeft">24dp</item>
-        <item name="cornerSizeTopRight">24dp</item>
+        <item name="cornerSizeTopLeft">20dp</item>
+        <item name="cornerSizeTopRight">20dp</item>
         <item name="cornerSizeBottomLeft">0dp</item>
         <item name="cornerSizeBottomRight">0dp</item>
     </style>

@@ -2,24 +2,36 @@ package com.releasemanager.ui
 
 import android.text.SpannableStringBuilder
 import android.text.Spanned
+import android.content.Context
 import android.text.method.KeyListener
+import android.text.style.BackgroundColorSpan
 import android.text.style.StyleSpan
 import android.graphics.Typeface
 import android.os.Handler
 import android.os.Looper
 import android.util.Base64
 import android.util.TypedValue
+import android.view.Gravity
+import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.View
+import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.ImageButton
+import android.widget.LinearLayout
 import android.widget.TextView
 import com.google.android.material.button.MaterialButton
 import com.releasemanager.R
 import com.releasemanager.data.EditMode
 import com.releasemanager.data.EditingFile
 import com.releasemanager.data.StagedFile
+import com.releasemanager.util.CompiledSearch
+import com.releasemanager.util.SearchOptions
+import com.releasemanager.util.TextSearch
 import kotlinx.coroutines.Job
+
+/** At most this many matches around the current one are painted, so a very common query stays fast. */
+private const val HIGHLIGHT_WINDOW = 400
 
 /**
  * Web: #screen-editor. Quick Edit commits the file straight away ("Commit"); Stage Mode keeps the
@@ -28,8 +40,9 @@ import kotlinx.coroutines.Job
  * Everything here runs against the in-memory text that came straight from the GitHub API — there is
  * never a local copy to download: Commit / Stage both send this same buffer back over the API. On
  * top of that, the field behaves like a small code editor: line numbers kept in sync with its own
- * scroll, pinch-to-zoom, a word-wrap toggle, a read-only (view only, still scrollable) toggle, find
- * and jump-to-line, and lightweight syntax colouring by file extension (see SyntaxHighlighter).
+ * scroll, pinch-to-zoom, a word-wrap toggle, a read-only (view only, still scrollable) toggle, a
+ * find / replace bar (match case, whole word, regex), jump-to-line, a quick-keys bar (Tab, cursor
+ * arrows, symbols) and lightweight syntax colouring by file extension (see SyntaxHighlighter).
  */
 class EditorScreen(private val ctx: AppContext) {
 
@@ -43,6 +56,24 @@ class EditorScreen(private val ctx: AppContext) {
     private val btnMenu: ImageButton = root.findViewById(R.id.btnEditorMenu)
     private val editorText: EditText = root.findViewById(R.id.editorText)
     private val lineNumbers: TextView = root.findViewById(R.id.editorLineNumbers)
+    private val btnFind: ImageButton = root.findViewById(R.id.btnEditorFind)
+
+    // Find / replace bar and quick keys
+    private val findBar: View = root.findViewById(R.id.findBar)
+    private val findInput: EditText = root.findViewById(R.id.findInput)
+    private val replaceInput: EditText = root.findViewById(R.id.replaceInput)
+    private val replaceRow: View = root.findViewById(R.id.replaceRow)
+    private val findResults: TextView = root.findViewById(R.id.findResults)
+    private val chipCase: TextView = root.findViewById(R.id.btnFindCase)
+    private val chipWord: TextView = root.findViewById(R.id.btnFindWord)
+    private val chipRegex: TextView = root.findViewById(R.id.btnFindRegex)
+    private val btnToggleReplace: ImageButton = root.findViewById(R.id.btnToggleReplace)
+    private val btnFindPrev: TextView = root.findViewById(R.id.btnFindPrev)
+    private val btnFindNext: TextView = root.findViewById(R.id.btnFindNext)
+    private val btnReplaceOne: TextView = root.findViewById(R.id.btnReplaceOne)
+    private val btnReplaceAll: TextView = root.findViewById(R.id.btnReplaceAll)
+    private val quickBar: View = root.findViewById(R.id.quickBar)
+    private val quickKeys: LinearLayout = root.findViewById(R.id.quickKeys)
 
     private var loadJob: Job? = null
 
@@ -58,6 +89,16 @@ class EditorScreen(private val ctx: AppContext) {
     private var wrapEnabled = true
     private var manualReadOnly = false
     private var lastSearch = ""
+
+    private var searchOptions = SearchOptions()
+    private var compiledSearch: CompiledSearch = CompiledSearch.Empty
+    private var matches = TextSearch.Matches.EMPTY
+    private var currentMatch = -1
+    /** Where the next search starts from: the start of the match last shown (or the caret when the bar opened). */
+    private var searchOrigin = 0
+    private val matchSpans = ArrayList<Any>()
+    private var pendingFindRefresh: Runnable? = null
+    private var suppressFindWatcher = false
     private var language = SyntaxHighlighter.Lang.NONE
 
     private val minTextSizeSp = 10f
@@ -84,6 +125,7 @@ class EditorScreen(private val ctx: AppContext) {
             if (!programmaticChange) {
                 setDirty(editorText.text.toString() != state.editorOriginal)
                 scheduleContentUpdate()
+                if (isFindOpen()) scheduleFindRefresh()
             }
         }
         // Pinch-to-zoom: the detector only observes the stream (it never consumes it), so normal
@@ -100,11 +142,18 @@ class EditorScreen(private val ctx: AppContext) {
         }
     }
 
+    init {
+        setupFindBar()
+        buildQuickKeys()
+        editorText.setOnFocusChangeListener { _, _ -> updateQuickBar() }
+    }
+
     // ── Open ─────────────────────────────────────────────────────────────────
 
     /** Web: openEditor(file). */
     fun open(file: EditingFile) {
         loadJob?.cancel()
+        closeFind()
         state.editingFile = file
         state.editorOriginal = ""
         loaded = false
@@ -192,12 +241,19 @@ class EditorScreen(private val ctx: AppContext) {
         btnStage.alpha = if (loaded) 1f else 0.4f
         btnMenu.isEnabled = loaded
         btnMenu.alpha = if (loaded) 1f else 0.4f
+        btnFind.isEnabled = loaded
+        btnFind.alpha = if (loaded) 1f else 0.4f
+        updateQuickBar()
     }
 
     // ── Back ─────────────────────────────────────────────────────────────────
 
     /** Web: #btn-back-editor. Also what the system Back button does on this screen. */
     fun onBack() {
+        if (isFindOpen()) {
+            closeFind()
+            return
+        }
         if (state.editMode == EditMode.STAGE) {
             // Stage Mode: Back drops the unsaved edits of this file (the staged version stays)
             leave()
@@ -208,6 +264,7 @@ class EditorScreen(private val ctx: AppContext) {
 
     private fun leave() {
         loadJob?.cancel()
+        closeFind()
         setDirty(false)
         ctx.show(Screen.FILES)
     }
@@ -404,7 +461,7 @@ class EditorScreen(private val ctx: AppContext) {
         Dialogs.sheet(
             act, state.editingFile?.name ?: "Editor",
             listOf(
-                Dialogs.SheetItem("Find in file", R.drawable.ic_search, onClick = { openFindDialog() }),
+                Dialogs.SheetItem("Find & replace", R.drawable.ic_search, onClick = { openFind() }),
                 Dialogs.SheetItem("Jump to line", R.drawable.ic_arrow_right, onClick = { openJumpToLineDialog() }),
                 Dialogs.SheetItem(
                     wrapLabel, R.drawable.ic_check_square,
@@ -427,35 +484,458 @@ class EditorScreen(private val ctx: AppContext) {
         )
     }
 
-    // ── Find ─────────────────────────────────────────────────────────────────
+    // ── Find & replace ───────────────────────────────────────────────────────
 
-    private fun openFindDialog() {
+    private fun isFindOpen() = findBar.visibility == View.VISIBLE
+
+    private fun setupFindBar() {
+        btnFind.setOnClickListener { openFind() }
+        root.findViewById<View>(R.id.btnFindClose).setOnClickListener { closeFind() }
+        btnFindNext.setOnClickListener { step(+1) }
+        btnFindPrev.setOnClickListener { step(-1) }
+        btnReplaceOne.setOnClickListener { onReplaceTapped(all = false) }
+        btnReplaceAll.setOnClickListener { onReplaceTapped(all = true) }
+        btnToggleReplace.setOnClickListener { setReplaceVisible(replaceRow.visibility != View.VISIBLE) }
+
+        chipCase.setOnClickListener { searchOptions = searchOptions.copy(caseSensitive = !searchOptions.caseSensitive); optionsChanged() }
+        chipWord.setOnClickListener { searchOptions = searchOptions.copy(wholeWord = !searchOptions.wholeWord); optionsChanged() }
+        chipRegex.setOnClickListener { searchOptions = searchOptions.copy(regex = !searchOptions.regex); optionsChanged() }
+
+        // Live search: every keystroke re-searches from where the search started, so the match grows in place
+        findInput.onTextChanged {
+            if (!suppressFindWatcher) {
+                lastSearch = findInput.text.toString()
+                refreshMatches(jump = true)
+            }
+        }
+        findInput.setOnEditorActionListener { _, _, _ ->
+            step(+1)
+            true
+        }
+        replaceInput.setOnEditorActionListener { _, _, _ ->
+            onReplaceTapped(all = false)
+            true
+        }
+        findInput.setOnFocusChangeListener { _, _ -> updateQuickBar() }
+        replaceInput.setOnFocusChangeListener { _, _ -> updateQuickBar() }
+        updateOptionChips()
+    }
+
+    /** Opens the bar under the editor; a short single-line selection becomes the query. */
+    private fun openFind() {
         if (!loaded) return
-        Dialogs.prompt(
-            act, title = "Find in file", label = "Text to find",
-            initial = lastSearch, positive = "Find", allowEmpty = false
-        ) { query ->
-            lastSearch = query
-            findNext(query)
+        val a = editorText.selectionStart
+        val b = editorText.selectionEnd
+        val selected = if (a in 0 until b && b - a <= 120) {
+            editorText.text?.subSequence(a, b)?.toString()?.takeIf { '\n' !in it }
+        } else {
+            null
+        }
+        val seed = selected ?: lastSearch
+        searchOrigin = if (a >= 0) a else 0
+
+        findBar.visibility = View.VISIBLE
+        suppressFindWatcher = true
+        findInput.setText(seed)
+        findInput.selectAll()
+        suppressFindWatcher = false
+        lastSearch = seed
+
+        updateOptionChips()
+        updateQuickBar()
+        refreshMatches(jump = true)
+
+        findInput.requestFocus()
+        findInput.post {
+            (act.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
+                ?.showSoftInput(findInput, InputMethodManager.SHOW_IMPLICIT)
         }
     }
 
-    private fun findNext(query: String) {
-        val text = editorText.text?.toString().orEmpty()
-        if (query.isEmpty() || text.isEmpty()) return
-        val from = editorText.selectionEnd.coerceIn(0, text.length)
-        var idx = text.indexOf(query, from, ignoreCase = true)
-        var wrapped = false
-        if (idx < 0) {
-            idx = text.indexOf(query, 0, ignoreCase = true)
-            wrapped = true
+    private fun closeFind() {
+        pendingFindRefresh?.let { mainHandler.removeCallbacks(it) }
+        pendingFindRefresh = null
+        clearMatchSpans()
+        matches = TextSearch.Matches.EMPTY
+        currentMatch = -1
+        if (!isFindOpen()) return
+        val inFindFields = findInput.hasFocus() || replaceInput.hasFocus()
+        findBar.visibility = View.GONE
+        // Carry on typing where the last match was found
+        if (inFindFields) editorText.requestFocus()
+        updateQuickBar()
+    }
+
+    private fun setReplaceVisible(show: Boolean) {
+        replaceRow.visibility = if (show) View.VISIBLE else View.GONE
+        btnToggleReplace.rotation = if (show) 180f else 0f
+        btnToggleReplace.contentDescription = if (show) "Hide replace" else "Show replace"
+        if (show) replaceInput.requestFocus()
+    }
+
+    private fun optionsChanged() {
+        updateOptionChips()
+        refreshMatches(jump = true)
+    }
+
+    private fun updateOptionChips() {
+        for ((chip, on) in listOf(
+            chipCase to searchOptions.caseSensitive,
+            chipWord to searchOptions.wholeWord,
+            chipRegex to searchOptions.regex
+        )) {
+            chip.isActivated = on
+            chip.setTextColor(act.color(if (on) R.color.accent else R.color.text_muted))
         }
-        if (idx < 0) {
-            ctx.toast.show("\"$query\" not found")
+    }
+
+    /**
+     * Searches the whole text again for the query in the bar and repaints the matches. [jump] selects
+     * (and scrolls to) the first match at/after [searchOrigin]; without it the list only follows
+     * the caret, which is what an edit in the text needs.
+     */
+    private fun refreshMatches(jump: Boolean) {
+        pendingFindRefresh?.let { mainHandler.removeCallbacks(it) }
+        pendingFindRefresh = null
+        clearMatchSpans()
+        if (!isFindOpen()) return
+
+        compiledSearch = TextSearch.compile(findInput.text.toString(), searchOptions)
+        val compiled = compiledSearch
+        matches = if (compiled is CompiledSearch.Ok) {
+            TextSearch.findAll(editorText.text.toString(), compiled.pattern)
+        } else {
+            TextSearch.Matches.EMPTY
+        }
+
+        currentMatch = if (matches.count == 0) {
+            -1
+        } else {
+            val from = if (jump) searchOrigin else editorText.selectionStart.coerceAtLeast(0)
+            TextSearch.indexAtOrAfter(matches.starts, from).let { if (it >= matches.count) 0 else it }
+        }
+
+        if (jump && currentMatch >= 0) {
+            goTo(currentMatch)
+        } else {
+            applyMatchSpans()
+            updateResultsLabel()
+        }
+    }
+
+    private fun scheduleFindRefresh() {
+        pendingFindRefresh?.let { mainHandler.removeCallbacks(it) }
+        val r = Runnable {
+            pendingFindRefresh = null
+            refreshMatches(jump = false)
+        }
+        pendingFindRefresh = r
+        mainHandler.postDelayed(r, 250)
+    }
+
+    /** Makes the list current before an action that relies on it (a pending edit may have shifted it). */
+    private fun flushFindRefresh() {
+        if (pendingFindRefresh != null) refreshMatches(jump = false)
+    }
+
+    private fun step(direction: Int) {
+        flushFindRefresh()
+        if (matches.count == 0) {
+            ctx.toast.show(if (findInput.text.isNullOrEmpty()) "Type something to search for" else "No results")
             return
         }
-        selectAndReveal(idx, idx + query.length)
-        if (wrapped) ctx.toast.show("Reached the end — continuing from the top")
+        val next = if (currentMatch < 0) {
+            TextSearch.indexAtOrAfter(matches.starts, editorText.selectionEnd.coerceAtLeast(0))
+                .let { if (it >= matches.count) 0 else it }
+        } else {
+            (currentMatch + direction + matches.count) % matches.count
+        }
+        goTo(next)
+    }
+
+    /** Makes match [index] the current one: painted stronger, selected in the text, scrolled into view. */
+    private fun goTo(index: Int) {
+        if (index !in 0 until matches.count) return
+        currentMatch = index
+        val start = matches.starts[index]
+        val end = matches.ends[index]
+        searchOrigin = start
+        clearMatchSpans()
+        applyMatchSpans()
+        updateResultsLabel()
+        val len = editorText.length()
+        editorText.setSelection(start.coerceIn(0, len), end.coerceIn(0, len))
+        revealRange(start)
+    }
+
+    private fun updateResultsLabel() {
+        val total = matches.count.toString() + if (matches.truncated) "+" else ""
+        val compiled = compiledSearch
+        val (text, colorRes) = when {
+            compiled is CompiledSearch.Invalid -> "Invalid pattern" to R.color.danger
+            compiled is CompiledSearch.Empty -> "Results: 0" to R.color.text_muted
+            matches.count == 0 -> "No results" to R.color.warning_text
+            currentMatch >= 0 -> "${currentMatch + 1} of $total" to R.color.text_muted
+            else -> "Results: $total" to R.color.text_muted
+        }
+        findResults.text = text
+        findResults.setTextColor(act.color(colorRes))
+        val usable = matches.count > 0
+        for (b in listOf(btnFindPrev, btnFindNext, btnReplaceOne, btnReplaceAll)) b.alpha = if (usable) 1f else 0.4f
+    }
+
+    // Matches are painted with background spans of their own; the syntax colouring only touches its own spans.
+    private fun applyMatchSpans() {
+        val ed = editorText.text ?: return
+        if (matches.count == 0) return
+        val centre = currentMatch.coerceAtLeast(0)
+        val from = (centre - HIGHLIGHT_WINDOW).coerceAtLeast(0)
+        val to = (centre + HIGHLIGHT_WINDOW).coerceAtMost(matches.count)
+        val other = (act.color(R.color.success) and 0x00FFFFFF) or 0x59000000
+        val strong = (act.color(R.color.warning) and 0x00FFFFFF) or 0xA6000000.toInt()
+        for (i in from until to) {
+            val s = matches.starts[i]
+            val e = matches.ends[i]
+            if (e > ed.length) continue
+            val span = BackgroundColorSpan(if (i == currentMatch) strong else other)
+            ed.setSpan(span, s, e, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            matchSpans.add(span)
+        }
+    }
+
+    private fun clearMatchSpans() {
+        val ed = editorText.text
+        if (ed != null) for (span in matchSpans) ed.removeSpan(span)
+        matchSpans.clear()
+    }
+
+    /** Scrolls so the line holding [offset] is on screen (a third of the way down when it has to move), without taking focus. */
+    private fun revealRange(offset: Int) {
+        editorText.post {
+            val layout = editorText.layout ?: return@post
+            val s = offset.coerceIn(0, editorText.length())
+            val line = layout.getLineForOffset(s)
+            val top = layout.getLineTop(line)
+            val bottom = layout.getLineBottom(line)
+            val visibleH = editorText.height - editorText.totalPaddingTop - editorText.totalPaddingBottom
+            var y = editorText.scrollY
+            if (top < y || bottom > y + visibleH) y = top - visibleH / 3
+            y = y.coerceIn(0, (layout.height - visibleH).coerceAtLeast(0))
+
+            var x = editorText.scrollX
+            if (!wrapEnabled) {
+                val px = layout.getPrimaryHorizontal(s).toInt()
+                val visibleW = editorText.width - editorText.totalPaddingLeft - editorText.totalPaddingRight
+                if (px < x || px > x + visibleW - act.dp(24)) x = (px - visibleW / 4).coerceAtLeast(0)
+            } else {
+                x = 0
+            }
+            editorText.scrollTo(x, y)
+        }
+    }
+
+    // ── Replace ──────────────────────────────────────────────────────────────
+
+    private fun onReplaceTapped(all: Boolean) {
+        // First tap just reveals the replace field
+        if (replaceRow.visibility != View.VISIBLE) {
+            setReplaceVisible(true)
+            return
+        }
+        if (manualReadOnly) {
+            ctx.toast.show("Read-only mode is on — turn it off to replace")
+            return
+        }
+        if (all) replaceAll() else replaceCurrent()
+    }
+
+    private fun replaceCurrent() {
+        flushFindRefresh()
+        val compiled = compiledSearch as? CompiledSearch.Ok ?: run {
+            ctx.toast.show("Type something to search for")
+            return
+        }
+        if (currentMatch !in 0 until matches.count) {
+            step(+1)
+            return
+        }
+        val ed = editorText.text ?: return
+        val start = matches.starts[currentMatch]
+        val end = matches.ends[currentMatch]
+        if (end > ed.length) return
+        val replacement = try {
+            TextSearch.replacementFor(ed.toString(), compiled.pattern, start, end, replaceInput.text.toString(), searchOptions.regex)
+        } catch (e: RuntimeException) {
+            ctx.toast.show("Invalid replacement text")
+            return
+        }
+        ed.replace(start, end, replacement)
+        val after = start + replacement.length
+        editorText.setSelection(after.coerceIn(0, editorText.length()))
+        searchOrigin = after
+        refreshMatches(jump = true) // on to the next match
+    }
+
+    private fun replaceAll() {
+        flushFindRefresh()
+        val compiled = compiledSearch as? CompiledSearch.Ok ?: run {
+            ctx.toast.show("Type something to search for")
+            return
+        }
+        val ed = editorText.text ?: return
+        val result = try {
+            TextSearch.replaceAll(ed.toString(), compiled.pattern, replaceInput.text.toString(), searchOptions.regex)
+        } catch (e: RuntimeException) {
+            ctx.toast.show("Invalid replacement text")
+            return
+        }
+        if (result.count == 0) {
+            ctx.toast.show("No results to replace")
+            return
+        }
+        val caret = editorText.selectionStart.coerceAtLeast(0)
+        val scroll = editorText.scrollY
+        clearMatchSpans()
+        programmaticChange = true
+        try {
+            ed.replace(0, ed.length, result.text)
+        } finally {
+            programmaticChange = false
+        }
+        setDirty(result.text != state.editorOriginal)
+        scheduleContentUpdate()
+        editorText.setSelection(caret.coerceAtMost(editorText.length()))
+        editorText.post { editorText.scrollTo(editorText.scrollX, scroll) }
+        searchOrigin = caret
+        refreshMatches(jump = false)
+        ctx.toast.success("Replaced ${result.count} match${if (result.count == 1) "" else "es"}")
+    }
+
+    // ── Quick keys ───────────────────────────────────────────────────────────
+
+    /** The bar is shown while text is being edited (or the find bar is open); never over a read-only file. */
+    private fun updateQuickBar() {
+        val editing = loaded && !manualReadOnly && editorText.hasFocus()
+        quickBar.visibility = if (editing || (loaded && isFindOpen())) View.VISIBLE else View.GONE
+    }
+
+    /** Keys act on the field that has focus: the find / replace fields while they are in use, else the text. */
+    private fun keyTarget(): EditText = when {
+        findInput.hasFocus() -> findInput
+        replaceInput.hasFocus() -> replaceInput
+        else -> editorText
+    }
+
+    private fun buildQuickKeys() {
+        quickKeys.addView(quickKey("Tab", 56) { insertText(tabText()) })
+        quickKeys.addView(arrowKey("←") { moveCaret(-1, 0) })
+        quickKeys.addView(arrowKey("→") { moveCaret(+1, 0) })
+        quickKeys.addView(arrowKey("↑") { moveCaret(0, -1) })
+        quickKeys.addView(arrowKey("↓") { moveCaret(0, +1) })
+        quickKeys.addView(View(act).apply {
+            setBackgroundColor(act.color(R.color.border))
+            layoutParams = LinearLayout.LayoutParams(act.dp(1), act.dp(24)).apply {
+                gravity = Gravity.CENTER_VERTICAL
+                setMargins(act.dp(6), 0, act.dp(6), 0)
+            }
+        })
+        for (symbol in "{}()[]<>\"';:=+-*/\\_|&!?#$%@,.~`^") {
+            val text = symbol.toString()
+            quickKeys.addView(quickKey(text, 44) { insertText(text) })
+        }
+    }
+
+    /** A 44dp-wide, 40dp-tall tile; it never takes focus, so the keyboard stays open while it is tapped. */
+    private fun quickKey(label: String, widthDp: Int, onClick: () -> Unit): TextView = TextView(act).apply {
+        text = label
+        gravity = Gravity.CENTER
+        textSize = 16f
+        typeface = Typeface.MONOSPACE
+        setTextColor(act.color(R.color.text_primary))
+        background = act.getDrawable(R.drawable.bg_quick_key)
+        isClickable = true
+        isFocusable = false
+        layoutParams = LinearLayout.LayoutParams(act.dp(widthDp), act.dp(40)).apply {
+            setMargins(act.dp(3), act.dp(6), act.dp(3), act.dp(6))
+        }
+        setOnClickListener { onClick() }
+    }
+
+    /** Cursor keys repeat while held, so a long line can be crossed without tapping fifty times. */
+    private fun arrowKey(label: String, move: () -> Unit): TextView {
+        val key = quickKey(label, 44) { }
+        val repeat = object : Runnable {
+            override fun run() {
+                move()
+                mainHandler.postDelayed(this, 70)
+            }
+        }
+        key.setOnClickListener(null)
+        key.setOnTouchListener { v, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    v.isPressed = true
+                    move()
+                    mainHandler.postDelayed(repeat, 350)
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    v.isPressed = false
+                    mainHandler.removeCallbacks(repeat)
+                }
+            }
+            true
+        }
+        return key
+    }
+
+    private fun tabText(): String {
+        val name = state.editingFile?.name.orEmpty().lowercase()
+        val wantsRealTab = name == "makefile" || name.endsWith(".go") || name.endsWith(".mk") || name.endsWith(".tsv")
+        return if (wantsRealTab) "\t" else "    "
+    }
+
+    private fun insertText(text: String) {
+        val target = keyTarget()
+        if (target === editorText && (!loaded || manualReadOnly)) return
+        val ed = target.text
+        val a = target.selectionStart
+        val b = target.selectionEnd
+        if (a < 0 || b < 0) {
+            ed.append(text)
+        } else {
+            ed.replace(minOf(a, b), maxOf(a, b), text)
+        }
+    }
+
+    private fun isMark(c: Char) = Character.getType(c) == Character.NON_SPACING_MARK.toInt()
+
+    /** Moves the caret one character sideways (skipping Thai vowel / tone marks) or one visual line up / down. */
+    private fun moveCaret(dx: Int, dy: Int) {
+        val target = keyTarget()
+        val text = target.text
+        val len = text.length
+        val sel = target.selectionEnd.coerceIn(0, len)
+        val pos = when {
+            dx < 0 -> {
+                var p = (sel - 1).coerceAtLeast(0)
+                while (p > 0 && isMark(text[p])) p--
+                p
+            }
+            dx > 0 -> {
+                var p = (sel + 1).coerceAtMost(len)
+                while (p < len && isMark(text[p])) p++
+                p
+            }
+            else -> {
+                val layout = target.layout ?: return
+                val line = layout.getLineForOffset(sel)
+                val toLine = line + dy
+                if (toLine < 0 || toLine >= layout.lineCount) return
+                layout.getOffsetForHorizontal(toLine, layout.getPrimaryHorizontal(sel))
+            }
+        }
+        target.setSelection(pos.coerceIn(0, len))
+        if (target === editorText) revealRange(pos)
     }
 
     // ── Jump to line ─────────────────────────────────────────────────────────

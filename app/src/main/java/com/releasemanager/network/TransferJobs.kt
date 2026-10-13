@@ -27,11 +27,11 @@ import java.util.zip.ZipOutputStream
  * need (api, ContentResolver, cache dir, paths, Uris) is passed in as plain values.
  */
 
-/** A file the user picked for upload ([size] is -1 when the provider did not say). */
-class PickedSource(val uri: Uri, val name: String, val size: Long = -1L)
+/** A file the user picked for upload. */
+class PickedSource(val uri: Uri, val name: String)
 
-/** One file to put into the clone: [open] is called on a background thread; [size] is -1 when unknown. */
-class PushSource(val path: String, val size: Long = -1L, val open: () -> InputStream)
+/** One file to put into the clone: [open] is called on a background thread. */
+class PushSource(val path: String, val open: () -> InputStream)
 
 /**
  * Document Uris from the system pickers are only readable while the Activity that received them is alive,
@@ -122,15 +122,9 @@ object ZipScan {
 
 // ── Uploads ──────────────────────────────────────────────────────────────────────────────────────
 
-/** Where each stage of [pushSources] sits on the progress bar (the bar only ever moves forward). */
-private const val CLONE_SHARE = 0.20f   // 0 – 20 %  : clone (the repo is downloaded first)
-private const val COPY_SHARE = 0.10f    // 20 – 30 % : copying the files into the clone
-private const val PUSH_START = 0.35f    // 35 – 100 %: commit + push (the bytes that really leave the phone)
-
 /**
- * Clone → copy every source in → one commit → one push. The bar follows what is really happening: the clone
- * and the push report their own percentages (see GitSession.Monitor), copying counts the files done.
- * [base] / [span] let a caller that did something before (reading a ZIP) use only part of the bar.
+ * Clone → copy every source in → one commit → one push. Progress: 0–50 % copying, 50–100 % pushing;
+ * the clone is shown as "unknown length".
  */
 suspend fun pushSources(
     api: GitHubApi,
@@ -139,43 +133,22 @@ suspend fun pushSources(
     branch: String,
     message: String,
     sources: List<PushSource>,
-    progress: TransferProgress,
-    base: Float = 0f,
-    span: Float = 1f
+    progress: TransferProgress
 ) {
-    fun at(f: Float) = base + span * f.coerceIn(0f, 1f)
     val total = sources.size
-    progress.update(at(0f), "Cloning $repo…")
+    progress.update(-1f, "Cloning $repo…")
     val session = api.openGitSession(cacheDir, repo, branch) { phase, text, pct ->
-        when {
-            pct < 0 -> progress.label(text)
-            phase == GitPhase.CLONE -> progress.update(at(CLONE_SHARE * pct / 100f), text)
-            else -> progress.update(at(PUSH_START + (1f - PUSH_START) * pct / 100f), text)
-        }
+        if (phase == GitPhase.PUSH && pct >= 0) progress.update(0.5f + pct / 200f, text) else progress.label(text)
     }
     try {
-        // With every size known the copy step follows the bytes copied, so one big file moves the bar while it copies
-        val bytesTotal = sources.sumOf { maxOf(it.size, 0L) }
-        val byBytes = bytesTotal > 0 && sources.all { it.size >= 0 }
-        var bytesBefore = 0L
         for ((i, src) in sources.withIndex()) {
             progress.item(i, "Copying ${i + 1}/$total…")
-            val before = bytesBefore
-            // Same measure as the byte updates below, so the bar never steps back between two files
-            val copied = if (byBytes) before.toFloat() / bytesTotal else i.toFloat() / total
-            progress.update(at(CLONE_SHARE + COPY_SHARE * copied), "Copying ${i + 1}/$total…")
-            val onBytes: ((Long) -> Unit)? = if (byBytes) fun(done: Long) {
-                progress.bytes(
-                    "Copying ${i + 1}/$total —", before + done, bytesTotal,
-                    base = at(CLONE_SHARE), span = span * COPY_SHARE
-                )
-            } else null
-            session.addFile(src.path, onBytes, src.open)
-            bytesBefore += maxOf(src.size, 0L)
+            progress.update(i.toFloat() / total * 0.5f, "Copying ${i + 1}/$total…")
+            session.addFile(src.path, src.open)
         }
-        progress.update(at(CLONE_SHARE + COPY_SHARE), "Preparing commit…")
+        progress.update(0.5f, "Preparing commit…")
         session.commitAndPush(message)
-        progress.update(at(1f), "Done")
+        progress.update(1f, "Done")
     } finally {
         session.close()
     }
@@ -185,9 +158,6 @@ object UploadJobs {
 
     /** GitHub itself refuses files over 100 MB in a repository, whatever tool is used. */
     const val GITHUB_MAX_FILE_BYTES = 100L * 1024 * 1024
-
-    /** Share of the bar used for copying a picked ZIP into the app cache, before the clone / push. */
-    private const val READ_ZIP_SHARE = 0.10f
 
     fun tooLargeMessage(name: String, size: Long) =
         "\"$name\" is ${formatSize(size)} — GitHub does not accept files over " +
@@ -207,7 +177,7 @@ object UploadJobs {
     ): TransferOutcome {
         try {
             val sources = files.map { f ->
-                PushSource(if (dir.isNotEmpty()) "$dir/${f.name}" else f.name, f.size) {
+                PushSource(if (dir.isNotEmpty()) "$dir/${f.name}" else f.name) {
                     cr.openInputStream(f.uri) ?: throw IOException("Could not read \"${f.name}\"")
                 }
             }
@@ -229,18 +199,13 @@ object UploadJobs {
         dir: String,
         zipUri: Uri,
         message: String,
-        progress: TransferProgress,
-        zipSize: Long = -1L
+        progress: TransferProgress
     ): TransferOutcome {
         var temp: File? = null
         try {
-            progress.update(0f, "Reading ZIP…")
-            // ZipFile needs a real file, so the picked document is copied into the app cache first.
-            // With the size known this fills the first part of the bar; the clone / push get the rest.
-            val copy = copyUriToCache(
-                cr, cacheDir, zipUri, "upload_zip_${System.currentTimeMillis()}.zip", progress, "Reading ZIP —",
-                total = zipSize, base = 0f, span = READ_ZIP_SHARE
-            )
+            progress.update(-1f, "Reading ZIP…")
+            // ZipFile needs a real file, so the picked document is copied into the app cache first
+            val copy = copyUriToCache(cr, cacheDir, zipUri, "upload_zip_${System.currentTimeMillis()}.zip", progress, "Reading ZIP…")
             temp = copy
             val zip = try {
                 withContext(Dispatchers.IO) { ZipFile(copy) }
@@ -256,8 +221,8 @@ object UploadJobs {
                 val tooBig = targets.firstOrNull { it.entry.size > GITHUB_MAX_FILE_BYTES }
                 if (tooBig != null) throw IOException(tooLargeMessage(tooBig.name, tooBig.entry.size))
 
-                val sources = targets.map { t -> PushSource(t.path, t.entry.size) { zip.getInputStream(t.entry) } }
-                pushSources(api, cacheDir, repo, branch, message, sources, progress, base = READ_ZIP_SHARE, span = 1f - READ_ZIP_SHARE)
+                val sources = targets.map { t -> PushSource(t.path) { zip.getInputStream(t.entry) } }
+                pushSources(api, cacheDir, repo, branch, message, sources, progress)
 
                 val skipped = listOfNotNull(
                     scan.duplicateCount.takeIf { it > 0 }?.let { "$it duplicate" },
@@ -321,17 +286,14 @@ object UploadJobs {
         uri: Uri,
         fileName: String,
         progress: TransferProgress,
-        prefix: String,
-        total: Long = -1L,
-        base: Float = 0f,
-        span: Float = 1f
+        prefix: String
     ): File = withContext(Dispatchers.IO) {
         val out = File(cacheDir, fileName)
         try {
             val input = cr.openInputStream(uri) ?: throw IOException("Could not open the selected file")
             input.use { src ->
                 out.outputStream().use { dst ->
-                    copyStream(src, dst, total) { done, all -> progress.bytes(prefix, done, all, base, span) }
+                    copyStream(src, dst, -1L) { done, _ -> progress.bytes(prefix, done, -1L) }
                 }
             }
         } catch (e: Throwable) {
@@ -378,21 +340,6 @@ object DownloadJobs {
             }
         }
         return TransferOutcome("Downloaded $n files")
-    }
-
-    /**
-     * The whole repository at [ref] as one ZIP. GitHub streams it without a length, so the notification
-     * shows the bytes received so far with an unknown-length bar.
-     */
-    suspend fun repoZip(
-        api: GitHubApi, cr: ContentResolver, uri: Uri,
-        repo: String, ref: String, fileName: String,
-        progress: TransferProgress
-    ): TransferOutcome {
-        writeTo(cr, uri) { out ->
-            api.downloadRepoZip(repo, ref, out) { done, total -> progress.bytes("Downloading", done, total) }
-        }
-        return TransferOutcome("Saved $fileName")
     }
 
     suspend fun runLogs(

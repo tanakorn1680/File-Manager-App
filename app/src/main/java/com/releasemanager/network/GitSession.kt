@@ -42,6 +42,10 @@ class GitSession private constructor(
 ) {
     private val paths = ArrayList<String>()
 
+    /** The commit made by [commitAndPush] (what the push delivered), once it exists. */
+    var headSha: String? = null
+        private set
+
     /** Copies one file into the working copy; [open] is called on a background thread. */
     suspend fun addFile(path: String, open: () -> InputStream) = withContext(Dispatchers.IO) {
         try {
@@ -80,9 +84,9 @@ class GitSession private constructor(
 
             val ident = PersonIdent(login, "$login@users.noreply.github.com")
             try {
-                git.commit().setMessage(message.ifBlank { "Upload files" })
+                headSha = git.commit().setMessage(message.ifBlank { "Upload files" })
                     .setAuthor(ident).setCommitter(ident)
-                    .setAllowEmpty(false).setSign(false).call()
+                    .setAllowEmpty(false).setSign(false).call().name
             } catch (e: EmptyCommitException) {
                 throw GitHubApiException("Nothing to commit — these files are identical to what is already in the repo.", 0)
             }

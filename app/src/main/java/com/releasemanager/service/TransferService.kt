@@ -185,7 +185,11 @@ class TransferService : Service(), TransferManager.Listener {
 
     // ── Notifications ────────────────────────────────────────────────────────
 
-    private fun verb(t: Transfer) = if (t.kind == TransferKind.UPLOAD) "Uploading" else "Downloading"
+    private fun verb(t: Transfer) = when (t.kind) {
+        TransferKind.UPLOAD -> "Uploading"
+        TransferKind.DOWNLOAD -> "Downloading"
+        TransferKind.WATCH -> "Building"
+    }
 
     private fun icon(@Suppress("UNUSED_PARAMETER") t: Transfer) = R.drawable.ic_stat_logo
 
@@ -203,7 +207,7 @@ class TransferService : Service(), TransferManager.Listener {
             .setCategory(NotificationCompat.CATEGORY_PROGRESS)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
-            .addAction(0, "Cancel", cancelIntent(t))
+            .addAction(0, if (t.kind == TransferKind.WATCH) "Stop watching" else "Cancel", cancelIntent(t))
         if (t.fraction >= 0f) {
             val pct = (t.fraction * 100).toInt().coerceIn(0, 100)
             b.setProgress(100, pct, false).setSubText("$pct%")
@@ -215,14 +219,21 @@ class TransferService : Service(), TransferManager.Listener {
 
     private fun resultNotification(t: Transfer): Notification {
         val ok = t.state == TransferState.SUCCESS
+        val watch = t.kind == TransferKind.WATCH
         val noun = if (t.kind == TransferKind.UPLOAD) "Upload" else "Download"
+        // A watch already carries a full sentence ("Build APK #12 failed"); the repo name goes in front of it
+        val text = when {
+            watch -> "${t.title} · ${t.message ?: if (ok) "succeeded" else "failed"}"
+            ok -> t.message ?: t.title
+            else -> "${t.title}: ${t.message ?: "error"}"
+        }
         return NotificationCompat.Builder(this, CHANNEL_DONE)
             .setSmallIcon(icon(t))
             .setLargeIcon(NotifIcons.result(this, ok))
             .setColor(ContextCompat.getColor(this, if (ok) R.color.success else R.color.danger))
-            .setContentTitle(if (ok) "$noun complete" else "$noun failed")
-            .setContentText(if (ok) t.message ?: t.title else "${t.title}: ${t.message ?: "error"}")
-            .setStyle(NotificationCompat.BigTextStyle().bigText(if (ok) t.message ?: t.title else "${t.title}: ${t.message ?: "error"}"))
+            .setContentTitle(if (watch) (if (ok) "Build succeeded" else "Build failed") else if (ok) "$noun complete" else "$noun failed")
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setContentIntent(openApp())
             .setAutoCancel(true)
             .setOngoing(false)

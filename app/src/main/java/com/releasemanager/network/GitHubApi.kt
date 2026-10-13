@@ -17,6 +17,7 @@ import com.releasemanager.data.WorkflowJob
 import com.releasemanager.data.WorkflowRun
 import com.releasemanager.data.WorkflowStep
 import com.releasemanager.util.copyStream
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
@@ -358,6 +359,7 @@ class GitHubApi(private val token: String) {
             authedRequest("https://api.github.com/repos/$repo/contents/${encodePath(path)}")
                 .put(jsonBody(payload)).build()
         ) as? JSONObject
+        notifyCommitted(repo, result?.optJSONObject("commit")?.let { optStr(it, "sha") })
         return result?.optJSONObject("content")?.let { optStr(it, "sha") }
     }
 
@@ -398,6 +400,7 @@ class GitHubApi(private val token: String) {
             authedRequest("https://api.github.com/repos/$repo/git/refs/heads/${encodePath(branch)}")
                 .patch(jsonBody(refPayload)).build()
         )
+        notifyCommitted(repo, commit.getString("sha"))
     }
 
     /** Deletes files (folders are expanded to their files) in one commit; returns the file count. */
@@ -462,6 +465,44 @@ class GitHubApi(private val token: String) {
         }
 
     // ── Actions (workflow runs and their artifacts) ──────────────────────
+
+    /** Runs GitHub started for one commit (several workflows can listen to the same push). */
+    suspend fun listRunsForSha(repo: String, sha: String): List<WorkflowRun> {
+        val req = authedRequest("https://api.github.com/repos/$repo/actions/runs?head_sha=${urlEncode(sha)}&per_page=30").get().build()
+        val json = execute(req) ?: throw GitHubApiException("Empty response from GitHub", 0)
+        val arr = json.optJSONArray("workflow_runs") ?: JSONArray()
+        return (0 until arr.length()).map { i -> parseRun(arr.getJSONObject(i)) }
+    }
+
+    /** Whether the repository has any workflow at all (cached for a few minutes). */
+    suspend fun hasWorkflows(repo: String): Boolean {
+        val now = System.currentTimeMillis()
+        synchronized(workflowCache) {
+            workflowCache[repo]?.let { if (now - it.first < 5 * 60_000L) return it.second }
+        }
+        val req = authedRequest("https://api.github.com/repos/$repo/actions/workflows?per_page=1").get().build()
+        val has = (execute(req)?.optInt("total_count", 0) ?: 0) > 0
+        synchronized(workflowCache) { workflowCache[repo] = now to has }
+        return has
+    }
+
+    private val workflowCache = HashMap<String, Pair<Long, Boolean>>()
+
+    /** Set by the app: called after a commit reached GitHub, only when the repo has workflows (see RunWatcher). */
+    var onCommitted: ((repo: String, sha: String) -> Unit)? = null
+
+    /** Announces a commit made by this app; never makes the commit itself fail. */
+    suspend fun notifyCommitted(repo: String, sha: String?) {
+        val cb = onCommitted ?: return
+        if (sha.isNullOrBlank()) return
+        try {
+            if (hasWorkflows(repo)) cb(repo, sha)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // A failed check only means no build notification
+        }
+    }
 
     /** Latest workflow runs of the repository, newest first. */
     suspend fun listWorkflowRuns(repo: String, perPage: Int = 30): List<WorkflowRun> {
@@ -665,6 +706,7 @@ class GitHubApi(private val token: String) {
             authedRequest("https://api.github.com/repos/$repo/git/refs/heads/${encodePath(branch)}")
                 .patch(jsonBody(refPayload)).build()
         )
+        notifyCommitted(repo, commit.getString("sha"))
     }
 
     // ── Releases ─────────────────────────────────────────────────────────

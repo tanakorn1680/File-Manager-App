@@ -4,6 +4,7 @@ import androidx.lifecycle.lifecycleScope
 import com.releasemanager.data.AppState
 import com.releasemanager.data.TokenStore
 import com.releasemanager.network.GitHubApi
+import com.releasemanager.service.RunWatcher
 import com.releasemanager.service.Transfer
 import com.releasemanager.service.TransferKind
 import com.releasemanager.service.TransferManager
@@ -119,6 +120,7 @@ class AppContext(
     /** Forget the token and everything loaded with it, then go back to the token screen. */
     fun disconnect() {
         tokenStore.clearToken()
+        RunWatcher.stopAll()
         api = null
         state.reset()
         repos.reset()

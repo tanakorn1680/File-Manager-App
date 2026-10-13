@@ -174,6 +174,7 @@ suspend fun pushSources(
         }
         progress.update(0.25f, "Preparing commit…")
         session.commitAndPush(message)
+        api.notifyCommitted(repo, session.headSha)
         progress.update(1f, "Done")
     } finally {
         session.close()

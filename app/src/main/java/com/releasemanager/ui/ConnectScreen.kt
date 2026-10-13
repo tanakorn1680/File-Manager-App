@@ -7,6 +7,7 @@ import com.google.android.material.button.MaterialButton
 import com.google.android.material.textfield.TextInputEditText
 import com.releasemanager.R
 import com.releasemanager.network.GitHubApi
+import com.releasemanager.service.RunWatcher
 
 /**
  * App-only screen: the web keeps its GitHub token on the server, the app asks for the user's own
@@ -60,6 +61,8 @@ class ConnectScreen(private val ctx: AppContext) {
         root.hideKeyboard()
         setConnecting(true)
         val client = GitHubApi(token)
+        // A commit pushed by this app that triggers GitHub Actions gets a "build succeeded / failed" notification
+        client.onCommitted = { repo, sha -> RunWatcher.afterCommit(ctx.activity, client, repo, sha) }
         ctx.launchSafe(onError = { showStatus("Connection failed: ${it.userMessage()}", isError = true) }) {
             try {
                 val user = client.verifyTokenAndGetUser()

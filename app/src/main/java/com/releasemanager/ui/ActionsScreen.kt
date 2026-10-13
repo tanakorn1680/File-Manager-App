@@ -13,6 +13,7 @@ import com.releasemanager.data.RunArtifact
 import com.releasemanager.data.WorkflowRun
 import com.releasemanager.network.DownloadJobs
 import com.releasemanager.network.RunLogReport
+import com.releasemanager.service.RunWatcher
 import com.releasemanager.util.formatSize
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -59,6 +60,11 @@ class ActionsScreen(private val ctx: AppContext) {
         loadJob = ctx.launchSafe(onError = { stateView.showError(it.userMessage()) { load() } }) {
             val runs = api.listWorkflowRuns(repo)
             adapter.submitList(runs)
+            // A build still running: tell the user how it ended, even if the app is closed by then
+            if (runs.any { it.status != "completed" }) {
+                act.requestNotificationPermission()
+                RunWatcher.watchUnfinished(act, api, repo, runs)
+            }
             if (runs.isEmpty()) {
                 stateView.showEmpty("No workflow runs yet.")
             } else {

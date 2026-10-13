@@ -238,6 +238,7 @@ class UploadScreen(private val ctx: AppContext) {
         val cacheDir = act.cacheDir
         val files = picked.map { PickedSource(it.uri, it.name) }
         val zip = mode == Mode.ZIP
+        val zipSize = picked.firstOrNull()?.size ?: -1L
         val message = inputCommitMsg.text.toString().ifEmpty { if (zip) "Upload ZIP contents" else "Upload files" }
 
         label1.text = if (zip) "Reading ZIP" else "Uploading files"
@@ -248,7 +249,7 @@ class UploadScreen(private val ctx: AppContext) {
         val title = if (zip || files.size == 1) files[0].name else "${files.size} files"
         transfer = ctx.startTransfer(TransferKind.UPLOAD, title, "repo:$repo", ::onTransferUpdate) { progress ->
             if (zip) {
-                UploadJobs.pushZip(api, cr, cacheDir, repo, branch, dir, files[0].uri, message, progress)
+                UploadJobs.pushZip(api, cr, cacheDir, repo, branch, dir, files[0].uri, message, progress, zipSize)
             } else {
                 UploadJobs.pushFiles(api, cr, cacheDir, repo, branch, dir, files, message, progress)
             }
@@ -464,8 +465,9 @@ class UploadScreen(private val ctx: AppContext) {
         )
     }
 
+    /** Same bar as ever; it just glides to each new value instead of jumping, so it reads as continuous movement. */
     private fun setProgress(bar: ProgressBar, fraction: Double) {
-        bar.progress = (fraction * 100).toInt().coerceIn(0, 100)
+        bar.setProgress((fraction * 100).toInt().coerceIn(0, 100), true)
     }
 
     /** Web: `setTimeout(() => { showScreen('files'); … }, 1200)` — but never yank the user back from elsewhere. */

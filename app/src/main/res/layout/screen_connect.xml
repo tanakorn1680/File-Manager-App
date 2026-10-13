@@ -40,6 +40,33 @@
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:gravity="center_horizontal"
+                android:orientation="vertical"
+                android:paddingTop="20dp"
+                android:paddingBottom="28dp">
+
+                <ImageView
+                    android:layout_width="80dp"
+                    android:layout_height="80dp"
+                    android:contentDescription="@string/app_name"
+                    android:src="@drawable/logo_tile" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:gravity="center"
+                    android:lineSpacingMultiplier="1.15"
+                    android:paddingStart="24dp"
+                    android:paddingEnd="24dp"
+                    android:text="Manage your repositories, files, releases and Actions"
+                    android:textColor="@color/text_muted"
+                    android:textSize="14sp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
                 android:background="@drawable/bg_card"
                 android:orientation="vertical"
                 android:padding="16dp">
@@ -95,6 +122,17 @@
                     android:layout_marginTop="16dp"
                     android:text="Connect" />
             </LinearLayout>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:gravity="center"
+                android:paddingStart="16dp"
+                android:paddingEnd="16dp"
+                android:text="Your token is stored encrypted on this device."
+                android:textColor="@color/text_dim"
+                android:textSize="12sp" />
         </LinearLayout>
     </ScrollView>
 </LinearLayout>

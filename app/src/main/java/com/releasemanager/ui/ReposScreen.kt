@@ -19,6 +19,7 @@ import com.releasemanager.data.EditMode
 import com.releasemanager.data.RepoRef
 import com.releasemanager.data.RepoSortKey
 import com.releasemanager.data.sortedForDisplay
+import com.releasemanager.network.DownloadJobs
 import kotlinx.coroutines.Job
 
 /** Web: #screen-repos — repo list with search, create, delete, visibility and the edit-mode sheet. */
@@ -135,6 +136,11 @@ class ReposScreen(private val ctx: AppContext) {
             listOf(
                 Dialogs.SheetItem("Open", R.drawable.ic_arrow_right, onClick = { openRepo(repo) }),
                 Dialogs.SheetItem(
+                    "Download as ZIP", R.drawable.ic_archive,
+                    sub = "Whole repository (${repo.defaultBranch}) in one .zip file",
+                    onClick = { downloadRepoZip(repo) }
+                ),
+                Dialogs.SheetItem(
                     "Change Visibility", R.drawable.ic_eye,
                     onClick = { confirmVisibility(repo) }
                 ),
@@ -149,6 +155,24 @@ class ReposScreen(private val ctx: AppContext) {
                 )
             )
         )
+    }
+
+    /**
+     * Saves the whole repository (default branch) as a ZIP: the user picks where, then the download runs in
+     * TransferService — it carries on with the app closed and its progress is in the notification.
+     */
+    private fun downloadRepoZip(repo: RepoRef) {
+        val fileName = "${repo.fullName.repoShortName()}.zip"
+        ctx.activity.createDocument(fileName, "application/zip") { uri ->
+            if (uri == null) return@createDocument
+            val api = ctx.api ?: return@createDocument
+            val cr = ctx.activity.applicationContext.contentResolver
+            val fullName = repo.fullName
+            val ref = repo.defaultBranch
+            ctx.startDownload(fileName) { progress ->
+                DownloadJobs.repoZip(api, cr, uri, fullName, ref, fileName, progress)
+            }
+        }
     }
 
     // ── Edit-mode sheet (pencil button) ──────────────────────────────────────

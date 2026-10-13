@@ -13,10 +13,12 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import java.util.zip.Deflater
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
@@ -339,15 +341,23 @@ object DownloadJobs {
     suspend fun file(
         api: GitHubApi, cr: ContentResolver, uri: Uri,
         repo: String, path: String, branch: String, name: String,
-        progress: TransferProgress
+        progress: TransferProgress,
+        size: Long = -1L
     ): TransferOutcome {
         writeTo(cr, uri) { out ->
-            api.downloadFile(repo, path, branch, out) { done, total -> progress.bytes("Downloading", done, total) }
+            api.downloadFile(repo, path, branch, out, { done, total -> progress.bytes("Downloading", done, total) }, size)
         }
         return TransferOutcome("Saved $name")
     }
 
-    /** Several files go into one ZIP. */
+    /** Files up to this size are fetched ahead, several at a time; bigger ones stream when their turn comes. */
+    private const val PREFETCH_MAX_BYTES = 4L * 1024 * 1024
+    private const val PREFETCH_PARALLEL = 6
+
+    /**
+     * Several files go into one ZIP. Small files (the usual case: source code) are downloaded six at a time —
+     * one request each, so latency rather than bandwidth was the limit — and written to the ZIP in list order.
+     */
     suspend fun filesZip(
         api: GitHubApi, cr: ContentResolver, uri: Uri,
         repo: String, branch: String, files: List<FileEntry>,
@@ -355,15 +365,41 @@ object DownloadJobs {
     ): TransferOutcome {
         val n = files.size
         writeTo(cr, uri) { out ->
-            ZipOutputStream(out.buffered()).use { zip ->
-                for ((i, f) in files.withIndex()) {
-                    progress.update(i.toFloat() / n, "Downloading ${i + 1}/$n…")
-                    zip.putNextEntry(ZipEntry(f.path))
-                    api.downloadFile(repo, f.path, branch, zip) { done, total ->
-                        progress.bytes("Downloading ${i + 1}/$n —", done, total, base = i.toFloat() / n, span = 1f / n)
+            ZipOutputStream(out.buffered(256 * 1024)).use { zip ->
+                // Fast deflate: the network, not compression, should be the limit
+                zip.setLevel(Deflater.BEST_SPEED)
+                var written = 0
+                fetchOrdered(
+                    items = files,
+                    concurrency = PREFETCH_PARALLEL,
+                    fetch = { f ->
+                        if (f.size in 0..PREFETCH_MAX_BYTES) {
+                            val buffer = ByteArrayOutputStream(f.size.toInt().coerceAtLeast(32))
+                            api.downloadFile(repo, f.path, branch, buffer)
+                            buffer.toByteArray()
+                        } else {
+                            null
+                        }
+                    },
+                    consume = { f, bytes ->
+                        val i = written
+                        zip.putNextEntry(ZipEntry(f.path))
+                        if (bytes != null) {
+                            zip.write(bytes)
+                        } else {
+                            api.downloadFile(
+                                repo, f.path, branch, zip,
+                                { done, total ->
+                                    progress.bytes("Downloading ${i + 1}/$n —", done, total, base = i.toFloat() / n, span = 1f / n)
+                                },
+                                f.size
+                            )
+                        }
+                        zip.closeEntry()
+                        written++
+                        progress.update(written.toFloat() / n, "Downloading $written/$n…")
                     }
-                    zip.closeEntry()
-                }
+                )
             }
         }
         return TransferOutcome("Downloaded $n files")

@@ -25,9 +25,11 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import okhttp3.Call
 import okhttp3.Callback
+import okhttp3.Dispatcher
 import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.RequestBody
 import okhttp3.Response
@@ -45,6 +47,7 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.resumeWithException
 
 /**
@@ -59,6 +62,14 @@ import kotlin.coroutines.resumeWithException
  * The repo / file / git operations below are ports of api/github.js from the
  * web version (same GitHub endpoints, same order of calls).
  */
+/** Files smaller than this are not worth splitting (the extra round trips would cost more than they save). */
+private const val SPLIT_MIN_BYTES = 8L * 1024 * 1024
+private const val PIECE_PARALLEL = 8
+private const val PIECE_MIN_BYTES = 1L * 1024 * 1024
+private const val PIECE_MAX_BYTES = 4L * 1024 * 1024
+private const val PIECE_ATTEMPTS = 4
+private const val RAW_ACCEPT = "application/vnd.github.raw+json"
+
 class GitHubApi(private val token: String) {
 
     private val client = OkHttpClient.Builder()
@@ -69,6 +80,17 @@ class GitHubApi(private val token: String) {
         // still-progressing upload. Progress is surfaced via onProgress
         // below so the user can see it's still moving rather than guess.
         .writeTimeout(60, TimeUnit.MINUTES)
+        // OkHttp allows 5 calls per host by default, which would cap a download split into parallel pieces
+        .dispatcher(Dispatcher().apply {
+            maxRequests = 64
+            maxRequestsPerHost = 16
+        })
+        .build()
+
+    // HTTP/1.1 only: every piece of a split download then gets its own TCP connection. Over HTTP/2 the pieces
+    // would share one connection (and one congestion window), which is exactly what splitting tries to avoid.
+    private val pieceClient: OkHttpClient = client.newBuilder()
+        .protocols(listOf(Protocol.HTTP_1_1))
         .build()
 
     private fun authedRequest(url: String): Request.Builder = Request.Builder()
@@ -322,13 +344,139 @@ class GitHubApi(private val token: String) {
         path: String,
         branch: String,
         sink: OutputStream,
-        onProgress: ((done: Long, total: Long) -> Unit)? = null
+        onProgress: ((done: Long, total: Long) -> Unit)? = null,
+        sizeHint: Long = -1L
     ) {
         withContext(Dispatchers.IO) {
-            val req = authedRequest(contentsUrl(repo, path, branch))
-                .header("Accept", "application/vnd.github.raw+json")
-                .get().build()
+            val url = contentsUrl(repo, path, branch)
+            // A big file is fetched in parallel pieces when the server answers Range requests
+            if (sizeHint >= SPLIT_MIN_BYTES) {
+                val src = PieceSource(url, authed = true, accept = RAW_ACCEPT)
+                val total = probeTotal(src)
+                if (total != null && total >= SPLIT_MIN_BYTES) {
+                    streamPieces(src, total, sink, onProgress)
+                    return@withContext
+                }
+            }
+            val req = authedRequest(url).header("Accept", RAW_ACCEPT).get().build()
             streamResponse(req, sink, onProgress)
+        }
+    }
+
+    // ── Split (multi-connection) downloads ───────────────────────────────
+
+    /** Where the pieces of a split download come from; [authed] adds the GitHub token (signed storage URLs need none). */
+    private class PieceSource(val url: String, val authed: Boolean, val accept: String?)
+
+    private fun pieceRequest(src: PieceSource, from: Long, to: Long): Request {
+        val b = if (src.authed) authedRequest(src.url) else Request.Builder().url(src.url)
+        if (src.accept != null) b.header("Accept", src.accept)
+        return b.header("Range", "bytes=$from-$to").get().build()
+    }
+
+    /** The file's full size when the server honours Range requests (answers 206 with a Content-Range), else null. */
+    private suspend fun probeTotal(src: PieceSource): Long? =
+        pieceClient.newCall(pieceRequest(src, 0, 0)).await().use { resp ->
+            if (resp.code != 206) return@use null
+            val range = resp.header("Content-Range") ?: return@use null // "bytes 0-0/12345"
+            range.substringAfterLast('/').toLongOrNull()?.takeIf { it > 0 }
+        }
+
+    /** Asks [req] for its redirect target without following it; null when the answer is not a redirect. */
+    private suspend fun resolveRedirect(req: Request): String? {
+        val noFollow = client.newBuilder().followRedirects(false).followSslRedirects(false).build()
+        return noFollow.newCall(req).await().use { resp ->
+            if (resp.isRedirect) {
+                val location = resp.header("Location") ?: return@use null
+                return@use req.url.resolve(location)?.toString()
+            }
+            if (!resp.isSuccessful) {
+                val bodyStr = resp.body?.string().orEmpty()
+                throw GitHubApiException(errorMessage(bodyStr, resp.code), resp.code)
+            }
+            null
+        }
+    }
+
+    /**
+     * Like [streamResponse] for an endpoint that redirects to storage (artifacts, run logs): when that storage
+     * supports Range requests and the file is big enough, it is downloaded as several parallel pieces — the
+     * speed-up a download manager gives — otherwise as one plain stream.
+     */
+    private suspend fun streamViaRedirect(req: Request, sink: OutputStream, onProgress: ((Long, Long) -> Unit)?) {
+        val url = resolveRedirect(req)
+        if (url == null) {
+            streamResponse(req, sink, onProgress)
+            return
+        }
+        val src = PieceSource(url, authed = false, accept = null)
+        val total = probeTotal(src)
+        if (total != null && total >= SPLIT_MIN_BYTES) {
+            streamPieces(src, total, sink, onProgress)
+        } else {
+            // The signed URL carries its own authorisation: no token header
+            streamResponse(Request.Builder().url(url).get().build(), sink, onProgress)
+        }
+    }
+
+    /** Downloads [total] bytes of [src] as parallel Range pieces and writes them to [sink] in order. */
+    private suspend fun streamPieces(
+        src: PieceSource,
+        total: Long,
+        sink: OutputStream,
+        onProgress: ((Long, Long) -> Unit)?
+    ) {
+        val pieceBytes = (total / PIECE_PARALLEL).coerceIn(PIECE_MIN_BYTES, PIECE_MAX_BYTES)
+        val pieceCount = ((total + pieceBytes - 1) / pieceBytes).toInt()
+        val received = AtomicLong(0L)
+        fetchOrdered(
+            items = (0 until pieceCount).toList(),
+            concurrency = PIECE_PARALLEL,
+            fetch = { index -> fetchPiece(src, index, pieceBytes, total, received, onProgress) },
+            consume = { _, bytes -> sink.write(bytes) }
+        )
+    }
+
+    /** One Range piece, in memory; a dropped connection is retried a few times before the download fails. */
+    private suspend fun fetchPiece(
+        src: PieceSource,
+        index: Int,
+        pieceBytes: Long,
+        total: Long,
+        received: AtomicLong,
+        onProgress: ((Long, Long) -> Unit)?
+    ): ByteArray {
+        val from = index * pieceBytes
+        val to = minOf(from + pieceBytes, total) - 1
+        val length = (to - from + 1).toInt()
+        var attempt = 0
+        while (true) {
+            var counted = 0L // bytes of this attempt already added to the shared progress
+            try {
+                return pieceClient.newCall(pieceRequest(src, from, to)).await().use { resp ->
+                    if (resp.code != 206) {
+                        throw GitHubApiException("The server stopped accepting partial downloads (HTTP ${resp.code})", resp.code)
+                    }
+                    val input = (resp.body ?: throw IOException("Empty response")).byteStream()
+                    val buffer = ByteArray(length)
+                    var filled = 0
+                    while (filled < length) {
+                        val n = input.read(buffer, filled, minOf(64 * 1024, length - filled))
+                        if (n < 0) throw IOException("Connection closed early")
+                        filled += n
+                        counted += n
+                        onProgress?.invoke(received.addAndGet(n.toLong()), total)
+                    }
+                    buffer
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: IOException) {
+                received.addAndGet(-counted) // the retry counts these bytes again
+                attempt++
+                if (attempt >= PIECE_ATTEMPTS) throw e
+                delay(400L * attempt)
+            }
         }
     }
 
@@ -540,7 +688,7 @@ class GitHubApi(private val token: String) {
     ) {
         withContext(Dispatchers.IO) {
             val req = authedRequest("https://api.github.com/repos/$repo/actions/artifacts/$artifactId/zip").get().build()
-            streamResponse(req, sink, onProgress)
+            streamViaRedirect(req, sink, onProgress)
         }
     }
 
@@ -654,7 +802,7 @@ class GitHubApi(private val token: String) {
     ) {
         withContext(Dispatchers.IO) {
             val req = authedRequest("https://api.github.com/repos/$repo/actions/runs/$runId/logs").get().build()
-            streamResponse(req, sink, onProgress)
+            streamViaRedirect(req, sink, onProgress)
         }
     }
 

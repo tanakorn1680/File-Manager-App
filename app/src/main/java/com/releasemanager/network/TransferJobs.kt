@@ -123,8 +123,33 @@ object ZipScan {
 // ── Uploads ──────────────────────────────────────────────────────────────────────────────────────
 
 /**
- * Clone → copy every source in → one commit → one push. Progress: 0–50 % copying, 50–100 % pushing;
- * the clone is shown as "unknown length".
+ * Where a git task sits on the bar (0..1), or -1 when it has no percentage of its own (only its text is shown).
+ * Clone 0–15 %, copying 15–25 %, push 25–100 % (compressing 25–33 %, writing = the real upload 33–99 %).
+ * Every JGit task counts 0–100 % on its own; giving each its own slice is what keeps the bar from going back.
+ */
+private fun gitFraction(phase: GitPhase, text: String, pct: Int): Float {
+    if (pct < 0) return -1f
+    val p = pct.coerceIn(0, 100) / 100f
+    val t = text.lowercase()
+    return when (phase) {
+        GitPhase.CLONE -> when {
+            "receiving" in t -> 0.10f * p
+            "resolving" in t -> 0.10f + 0.03f * p
+            "checking out" in t -> 0.13f + 0.02f * p
+            else -> -1f
+        }
+        GitPhase.PUSH -> when {
+            "compressing" in t -> 0.25f + 0.08f * p
+            "writing" in t -> 0.33f + 0.66f * p
+            else -> -1f
+        }
+        GitPhase.OTHER -> -1f
+    }
+}
+
+/**
+ * Clone → copy every source in → one commit → one push. The bar follows the real work (see [gitFraction]);
+ * it never moves backwards.
  */
 suspend fun pushSources(
     api: GitHubApi,
@@ -138,15 +163,16 @@ suspend fun pushSources(
     val total = sources.size
     progress.update(-1f, "Cloning $repo…")
     val session = api.openGitSession(cacheDir, repo, branch) { phase, text, pct ->
-        if (phase == GitPhase.PUSH && pct >= 0) progress.update(0.5f + pct / 200f, text) else progress.label(text)
+        val f = gitFraction(phase, text, pct)
+        if (f >= 0f) progress.update(f, text) else progress.label(text)
     }
     try {
         for ((i, src) in sources.withIndex()) {
             progress.item(i, "Copying ${i + 1}/$total…")
-            progress.update(i.toFloat() / total * 0.5f, "Copying ${i + 1}/$total…")
+            progress.update(0.15f + i.toFloat() / total * 0.10f, "Copying ${i + 1}/$total…")
             session.addFile(src.path, src.open)
         }
-        progress.update(0.5f, "Preparing commit…")
+        progress.update(0.25f, "Preparing commit…")
         session.commitAndPush(message)
         progress.update(1f, "Done")
     } finally {
@@ -340,6 +366,18 @@ object DownloadJobs {
             }
         }
         return TransferOutcome("Downloaded $n files")
+    }
+
+    /** The whole repository (one branch) as a single ZIP, the same archive GitHub's "Download ZIP" gives. */
+    suspend fun repoZip(
+        api: GitHubApi, cr: ContentResolver, uri: Uri,
+        repo: String, branch: String, fileName: String,
+        progress: TransferProgress
+    ): TransferOutcome {
+        writeTo(cr, uri) { out ->
+            api.downloadRepoZip(repo, branch, out) { done, total -> progress.bytes("Downloading", done, total) }
+        }
+        return TransferOutcome("Saved $fileName")
     }
 
     suspend fun runLogs(

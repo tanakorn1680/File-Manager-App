@@ -43,6 +43,7 @@ class ReleaseDetailActivity : AppCompatActivity() {
     private lateinit var uploadProgressGroup: View
     private lateinit var textUploadLabel: TextView
     private lateinit var progressUpload: ProgressBar
+    private lateinit var smoothUpload: SmoothProgress
     private lateinit var btnCancelUpload: MaterialButton
     private lateinit var recyclerAssets: RecyclerView
     private lateinit var textEmptyAssets: TextView
@@ -104,6 +105,7 @@ class ReleaseDetailActivity : AppCompatActivity() {
         uploadProgressGroup = findViewById(R.id.uploadProgressGroup)
         textUploadLabel = findViewById(R.id.textUploadLabel)
         progressUpload = findViewById(R.id.progressUpload)
+        smoothUpload = SmoothProgress(progressUpload)
         btnCancelUpload = findViewById(R.id.btnCancelUpload)
         recyclerAssets = findViewById(R.id.recyclerAssets)
         textEmptyAssets = findViewById(R.id.textEmptyAssets)
@@ -173,7 +175,7 @@ class ReleaseDetailActivity : AppCompatActivity() {
 
         dropZone.visibility = View.GONE
         uploadProgressGroup.visibility = View.VISIBLE
-        progressUpload.progress = 0
+        smoothUpload.reset()
         textUploadLabel.text = "Preparing $fileName…"
 
         requestNotificationPermission()
@@ -195,7 +197,7 @@ class ReleaseDetailActivity : AppCompatActivity() {
 
     private fun showProgress(t: Transfer) {
         textUploadLabel.text = if (t.label.isBlank()) "Uploading ${t.title}…" else "${t.title}: ${t.label}"
-        if (t.fraction >= 0f) progressUpload.progress = (t.fraction * 100).toInt().coerceIn(0, 100)
+        if (t.fraction >= 0f) smoothUpload.set(t.fraction)
     }
 
     /** Progress and the final result of the background upload, while this screen is open. */

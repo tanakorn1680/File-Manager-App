@@ -56,6 +56,8 @@ class UploadScreen(private val ctx: AppContext) {
     private val progress1: ProgressBar = root.findViewById(R.id.progress1)
     private val label2: TextView = root.findViewById(R.id.textProgressLabel2)
     private val progress2: ProgressBar = root.findViewById(R.id.progress2)
+    private val smooth1 = SmoothProgress(progress1)
+    private val smooth2 = SmoothProgress(progress2)
     private val commitWrap: View = root.findViewById(R.id.commitWrap)
     private val inputCommitMsg: EditText = root.findViewById(R.id.inputCommitMsg)
     private val btnDoUpload: MaterialButton = root.findViewById(R.id.btnDoUpload)
@@ -96,8 +98,8 @@ class UploadScreen(private val ctx: AppContext) {
         commitWrap.visibility = View.GONE
         btnDoUpload.visibility = View.GONE
         progressGroup.visibility = View.GONE
-        progress1.progress = 0
-        progress2.progress = 0
+        smooth1.reset()
+        smooth2.reset()
         btnDoUpload.text = if (zip) "Upload & Extract" else "Upload"
         inputCommitMsg.setText(if (zip) "Upload ZIP contents" else "Upload files")
 
@@ -194,8 +196,8 @@ class UploadScreen(private val ctx: AppContext) {
         uploading = true
         btnDoUpload.isEnabled = false
         root.hideKeyboard()
-        progress1.progress = 0
-        progress2.progress = 0
+        smooth1.reset()
+        smooth2.reset()
         progressGroup.visibility = View.VISIBLE
 
         if (state.editMode != EditMode.STAGE) {
@@ -351,7 +353,7 @@ class UploadScreen(private val ctx: AppContext) {
         label1.text = "Reading ZIP"
         label2.visibility = View.GONE
         progress2.visibility = View.GONE
-        progress2.progress = 0
+        smooth2.reset()
 
         try {
             setStatus(0, "Reading ZIP…", Kind.WORKING)
@@ -465,7 +467,7 @@ class UploadScreen(private val ctx: AppContext) {
     }
 
     private fun setProgress(bar: ProgressBar, fraction: Double) {
-        bar.progress = (fraction * 100).toInt().coerceIn(0, 100)
+        (if (bar === progress1) smooth1 else smooth2).set(fraction.toFloat())
     }
 
     /** Web: `setTimeout(() => { showScreen('files'); … }, 1200)` — but never yank the user back from elsewhere. */

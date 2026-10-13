@@ -503,6 +503,22 @@ class GitHubApi(private val token: String) {
         }
     }
 
+    /**
+     * Streams the whole repository at [ref] as a ZIP into [sink] (does not close it). GitHub answers with a
+     * redirect to its archive host; OkHttp follows it. The size is usually unknown, so progress reports bytes only.
+     */
+    suspend fun downloadRepoZip(
+        repo: String,
+        ref: String,
+        sink: OutputStream,
+        onProgress: ((done: Long, total: Long) -> Unit)? = null
+    ) {
+        withContext(Dispatchers.IO) {
+            val url = "https://api.github.com/repos/$repo/zipball" + if (ref.isNotBlank()) "/${encodePath(ref)}" else ""
+            streamResponse(authedRequest(url).get().build(), sink, onProgress)
+        }
+    }
+
     /** Jobs of a run (latest attempt) with their steps — tells which step failed. */
     suspend fun listRunJobs(repo: String, runId: Long): List<WorkflowJob> {
         val data = call(

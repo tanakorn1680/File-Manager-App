@@ -186,7 +186,7 @@ class TransferService : Service(), TransferManager.Listener {
 
     private fun verb(t: Transfer) = if (t.kind == TransferKind.UPLOAD) "Uploading" else "Downloading"
 
-    private fun icon(t: Transfer) = if (t.kind == TransferKind.UPLOAD) R.drawable.ic_upload else R.drawable.ic_download
+    private fun icon(@Suppress("UNUSED_PARAMETER") t: Transfer) = R.drawable.ic_stat_logo
 
     private fun progressNotification(t: Transfer): Notification {
         val b = NotificationCompat.Builder(this, CHANNEL_PROGRESS)
@@ -229,7 +229,7 @@ class TransferService : Service(), TransferManager.Listener {
 
     private fun placeholder(): Notification =
         NotificationCompat.Builder(this, CHANNEL_PROGRESS)
-            .setSmallIcon(R.drawable.ic_upload)
+            .setSmallIcon(R.drawable.ic_stat_logo)
             .setContentTitle("Release Manager")
             .setSilent(true)
             .build()

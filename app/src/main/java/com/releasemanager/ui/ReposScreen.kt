@@ -19,6 +19,7 @@ import com.releasemanager.data.EditMode
 import com.releasemanager.data.RepoRef
 import com.releasemanager.data.RepoSortKey
 import com.releasemanager.data.sortedForDisplay
+import com.releasemanager.network.DownloadJobs
 import kotlinx.coroutines.Job
 
 /** Web: #screen-repos — repo list with search, create, delete, visibility and the edit-mode sheet. */
@@ -135,6 +136,10 @@ class ReposScreen(private val ctx: AppContext) {
             listOf(
                 Dialogs.SheetItem("Open", R.drawable.ic_arrow_right, onClick = { openRepo(repo) }),
                 Dialogs.SheetItem(
+                    "Download as ZIP", R.drawable.ic_download,
+                    onClick = { downloadRepoZip(repo) }
+                ),
+                Dialogs.SheetItem(
                     "Change Visibility", R.drawable.ic_eye,
                     onClick = { confirmVisibility(repo) }
                 ),
@@ -149,6 +154,21 @@ class ReposScreen(private val ctx: AppContext) {
                 )
             )
         )
+    }
+
+    /** Save-as picker, then the ZIP is written by TransferService (progress notification, survives closing the app). */
+    private fun downloadRepoZip(repo: RepoRef) {
+        val api = ctx.api ?: return
+        val branch = repo.defaultBranch
+        val fullName = repo.fullName
+        val fileName = fullName.repoShortName() + (if (branch.isNotBlank()) "-$branch" else "") + ".zip"
+        ctx.activity.createDocument(fileName, "application/zip") { uri ->
+            if (uri == null) return@createDocument
+            val cr = ctx.activity.applicationContext.contentResolver
+            ctx.startDownload(fileName) { progress ->
+                DownloadJobs.repoZip(api, cr, uri, fullName, branch, fileName, progress)
+            }
+        }
     }
 
     // ── Edit-mode sheet (pencil button) ──────────────────────────────────────

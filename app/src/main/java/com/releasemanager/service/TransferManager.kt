@@ -60,15 +60,23 @@ class Transfer internal constructor(
     @Volatile internal var started: Boolean = false
     @Volatile internal var lastEmit: Long = 0L
 
+    /** Highest fraction reported so far: progress only ever moves forward. */
+    internal var peak: Float = 0f
+
     val isRunning: Boolean get() = state == TransferState.RUNNING
 }
 
 /** Handed to the transfer's block so it can report progress; every call is safe from any thread. */
 class TransferProgress internal constructor(private val t: Transfer) {
 
+    /** Forward-only: a lower value than one already reported is raised to it; -1 (unknown) is passed through. */
+    private fun settle(fraction: Float): Float = synchronized(t) {
+        if (fraction < 0f) -1f else fraction.coerceIn(0f, 1f).coerceAtLeast(t.peak).also { t.peak = it }
+    }
+
     /** Sets the fraction (-1 = unknown) and optionally the text. */
     fun update(fraction: Float, label: String? = null) {
-        t.fraction = if (fraction < 0f) -1f else fraction.coerceAtMost(1f)
+        t.fraction = settle(fraction)
         if (label != null) t.label = label
         TransferManager.changed(t, force = false)
     }
@@ -88,7 +96,7 @@ class TransferProgress internal constructor(private val t: Transfer) {
     /** Byte progress of the current stream: [prefix] + "12.3 MB / 40.0 MB". */
     fun bytes(prefix: String, done: Long, total: Long, base: Float = 0f, span: Float = 1f) {
         if (!TransferManager.due(t)) return
-        t.fraction = if (total > 0) (base + span * (done.toDouble() / total).toFloat()).coerceIn(0f, 1f) else -1f
+        t.fraction = if (total > 0) settle(base + span * (done.toDouble() / total).toFloat()) else -1f
         t.label = if (total > 0) "$prefix ${formatSize(done)} / ${formatSize(total)}" else "$prefix ${formatSize(done)}"
         TransferManager.changed(t, force = true)
     }

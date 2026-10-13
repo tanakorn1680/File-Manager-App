@@ -1,0 +1,13 @@
+# JGit loads message bundles and many classes reflectively
+-keep class org.eclipse.jgit.** { *; }
+-keep class com.googlecode.javaewah.** { *; }
+-dontwarn org.eclipse.jgit.**
+-dontwarn org.slf4j.**
+-dontwarn com.jcraft.jsch.**
+-dontwarn org.apache.sshd.**
+-dontwarn org.bouncycastle.**
+-dontwarn com.sun.jna.**
+-dontwarn javax.management.**
+-dontwarn java.lang.ProcessHandle
+-dontwarn java.rmi.**
+-dontwarn org.ietf.jgss.**

@@ -12,6 +12,7 @@ import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import androidx.core.content.ContextCompat
 import com.releasemanager.R
 import com.releasemanager.ui.MainActivity
 import com.releasemanager.ui.userMessage
@@ -191,6 +192,8 @@ class TransferService : Service(), TransferManager.Listener {
     private fun progressNotification(t: Transfer): Notification {
         val b = NotificationCompat.Builder(this, CHANNEL_PROGRESS)
             .setSmallIcon(icon(t))
+            .setLargeIcon(NotifIcons.logo(this))
+            .setColor(ContextCompat.getColor(this, R.color.accent))
             .setContentTitle("${verb(t)} ${t.title}")
             .setContentText(t.label.ifBlank { "Starting…" })
             .setContentIntent(openApp())
@@ -215,6 +218,8 @@ class TransferService : Service(), TransferManager.Listener {
         val noun = if (t.kind == TransferKind.UPLOAD) "Upload" else "Download"
         return NotificationCompat.Builder(this, CHANNEL_DONE)
             .setSmallIcon(icon(t))
+            .setLargeIcon(NotifIcons.result(this, ok))
+            .setColor(ContextCompat.getColor(this, if (ok) R.color.success else R.color.danger))
             .setContentTitle(if (ok) "$noun complete" else "$noun failed")
             .setContentText(if (ok) t.message ?: t.title else "${t.title}: ${t.message ?: "error"}")
             .setStyle(NotificationCompat.BigTextStyle().bigText(if (ok) t.message ?: t.title else "${t.title}: ${t.message ?: "error"}"))

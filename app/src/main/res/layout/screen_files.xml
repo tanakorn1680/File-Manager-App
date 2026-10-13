@@ -212,6 +212,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:clipToPadding="false"
+                android:paddingTop="12dp"
                 android:paddingBottom="96dp" />
 
             <include layout="@layout/layout_state" />

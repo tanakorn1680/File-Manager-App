@@ -91,16 +91,16 @@ class UploadScreen(private val ctx: AppContext) {
         fileList.removeAllViews()
 
         val zip = mode == Mode.ZIP
-        textTitle.text = if (zip) "Upload ZIP" else "Upload Files"
-        textZone.text = if (zip) "Tap to select ZIP file" else "Tap to select files"
-        textZoneSub.text = if (zip) "Pick a .zip from your device" else "Pick files from your device"
+        textTitle.text = I18n.tr(if (zip) "Upload ZIP" else "Upload Files")
+        textZone.text = I18n.tr(if (zip) "Tap to select ZIP file" else "Tap to select files")
+        textZoneSub.text = I18n.tr(if (zip) "Pick a .zip from your device" else "Pick files from your device")
         fileList.visibility = View.GONE
         commitWrap.visibility = View.GONE
         btnDoUpload.visibility = View.GONE
         progressGroup.visibility = View.GONE
         smooth1.reset()
         smooth2.reset()
-        btnDoUpload.text = if (zip) "Upload & Extract" else "Upload"
+        btnDoUpload.text = I18n.tr(if (zip) "Upload & Extract" else "Upload")
         inputCommitMsg.setText(if (zip) "Upload ZIP contents" else "Upload files")
 
         ctx.show(Screen.UPLOAD)
@@ -244,7 +244,7 @@ class UploadScreen(private val ctx: AppContext) {
         val zip = mode == Mode.ZIP
         val message = inputCommitMsg.text.toString().ifEmpty { if (zip) "Upload ZIP contents" else "Upload files" }
 
-        label1.text = if (zip) "Reading ZIP" else "Uploading files"
+        label1.text = I18n.tr(if (zip) "Reading ZIP" else "Uploading files")
         label2.visibility = View.GONE
         progress2.visibility = View.GONE
         if (zip) setStatus(0, "Reading ZIP…", Kind.WORKING)
@@ -312,7 +312,7 @@ class UploadScreen(private val ctx: AppContext) {
         val files = picked
         val total = files.size
 
-        label1.text = "Staging files"
+        label1.text = I18n.tr("Staging files")
         label2.visibility = View.GONE
         progress2.visibility = View.GONE
 
@@ -352,7 +352,7 @@ class UploadScreen(private val ctx: AppContext) {
         val pick = picked.firstOrNull() ?: return
         var tempFile: File? = null
 
-        label1.text = "Reading ZIP"
+        label1.text = I18n.tr("Reading ZIP")
         label2.visibility = View.GONE
         progress2.visibility = View.GONE
         smooth2.reset()

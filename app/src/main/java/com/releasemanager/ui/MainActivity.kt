@@ -139,7 +139,9 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        I18n.init(this)
         setContentView(R.layout.activity_main)
+        I18n.translateTree(findViewById(android.R.id.content))
 
         ctx = AppContext(
             activity = this,

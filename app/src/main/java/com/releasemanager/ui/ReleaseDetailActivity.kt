@@ -72,7 +72,9 @@ class ReleaseDetailActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        I18n.init(this)
         setContentView(R.layout.activity_release_detail)
+        I18n.translateTree(findViewById(android.R.id.content))
 
         repo = intent.getStringExtra(EXTRA_REPO) ?: run { finish(); return }
         releaseId = intent.getLongExtra(EXTRA_RELEASE_ID, -1)
@@ -190,7 +192,7 @@ class ReleaseDetailActivity : AppCompatActivity() {
         dropZone.visibility = View.GONE
         uploadProgressGroup.visibility = View.VISIBLE
         smoothUpload.reset()
-        textUploadLabel.text = "Preparing $fileName…"
+        textUploadLabel.text = I18n.tr("Preparing $fileName…")
 
         requestNotificationPermission()
 
@@ -210,7 +212,7 @@ class ReleaseDetailActivity : AppCompatActivity() {
     }
 
     private fun showProgress(t: Transfer) {
-        textUploadLabel.text = if (t.label.isBlank()) "Uploading ${t.title}…" else "${t.title}: ${t.label}"
+        textUploadLabel.text = I18n.tr(if (t.label.isBlank()) "Uploading ${t.title}…" else "${t.title}: ${t.label}")
         if (t.fraction >= 0f) smoothUpload.set(t.fraction)
     }
 

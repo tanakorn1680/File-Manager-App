@@ -52,7 +52,7 @@ class HistoryAdapter(
             holder.textMessage.text = commit.title
             holder.textMessage.visibility = if (commit.title.isBlank()) View.GONE else View.VISIBLE
         } else {
-            holder.textName.text = commit.title.ifBlank { "(no message)" }
+            holder.textName.text = commit.title.ifBlank { I18n.tr("(no message)") }
             holder.textName.setTextColor(ctx.color(R.color.text_primary))
             holder.textMessage.visibility = View.GONE
         }

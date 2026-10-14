@@ -44,6 +44,7 @@ object Dialogs {
     fun create(activity: Activity, layoutRes: Int): Pair<Dialog, View> {
         val dialog = Dialog(activity, R.style.Theme_App_Dialog)
         val view = LayoutInflater.from(dialog.context).inflate(layoutRes, null)
+        I18n.translateTree(view)
         // Explicit params: with a null parent the layout's own match_parent height would be lost
         dialog.setContentView(
             view,
@@ -88,12 +89,12 @@ object Dialogs {
         onConfirm: () -> Unit
     ) {
         val (dialog, view) = create(activity, R.layout.dialog_confirm)
-        view.findViewById<TextView>(R.id.dialogTitle).text = title
-        view.findViewById<TextView>(R.id.dialogBody).text = body
+        view.findViewById<TextView>(R.id.dialogTitle).text = I18n.tr(title)
+        view.findViewById<TextView>(R.id.dialogBody).text = I18n.tr(body)
         val btnNegative = view.findViewById<MaterialButton>(R.id.btnNegative)
         val btnPositive = view.findViewById<MaterialButton>(R.id.btnPositive)
-        btnNegative.text = negative
-        btnPositive.text = positive
+        btnNegative.text = I18n.tr(negative)
+        btnPositive.text = I18n.tr(positive)
         applyStyle(btnPositive, positiveStyle)
 
         btnNegative.setOnClickListener {
@@ -129,15 +130,15 @@ object Dialogs {
         onSubmit: (String) -> Unit
     ) {
         val (dialog, view) = create(activity, R.layout.dialog_prompt)
-        view.findViewById<TextView>(R.id.dialogTitle).text = title
-        view.findViewById<TextView>(R.id.dialogLabel).text = label
+        view.findViewById<TextView>(R.id.dialogTitle).text = I18n.tr(title)
+        view.findViewById<TextView>(R.id.dialogLabel).text = I18n.tr(label)
         val input = view.findViewById<EditText>(R.id.dialogInput)
         val btnNegative = view.findViewById<MaterialButton>(R.id.btnNegative)
         val btnPositive = view.findViewById<MaterialButton>(R.id.btnPositive)
-        btnPositive.text = positive
+        btnPositive.text = I18n.tr(positive)
         input.setText(initial)
         input.setSelection(input.text.length)
-        if (hint != null) input.hint = hint
+        if (hint != null) input.hint = I18n.tr(hint)
 
         fun submit() {
             val text = input.text.toString()
@@ -171,7 +172,7 @@ object Dialogs {
         val dialog = BottomSheetDialog(activity, R.style.Theme_App_BottomSheetDialog)
         val inflater = LayoutInflater.from(dialog.context)
         val view = inflater.inflate(R.layout.sheet_actions, null)
-        view.findViewById<TextView>(R.id.sheetTitle).text = title
+        view.findViewById<TextView>(R.id.sheetTitle).text = I18n.tr(title)
         val container = view.findViewById<LinearLayout>(R.id.sheetItems)
 
         for (item in items) {
@@ -183,10 +184,10 @@ object Dialogs {
             val icon = row.findViewById<ImageView>(R.id.sheetIcon)
             val box = row.findViewById<FrameLayout>(R.id.sheetIconBox)
 
-            label.text = item.label
+            label.text = I18n.tr(item.label)
             icon.setImageResource(item.iconRes)
             if (item.sub != null) {
-                sub.text = item.sub
+                sub.text = I18n.tr(item.sub)
                 sub.visibility = View.VISIBLE
             }
             if (item.danger) {

@@ -60,7 +60,7 @@ class HistoryScreen(private val ctx: AppContext) {
 
     fun enter() {
         ctx.show(Screen.HISTORY)
-        textTitle.text = "History · ${state.currentBranch}"
+        textTitle.text = I18n.tr("History · ${state.currentBranch}")
         load()
     }
 

@@ -20,7 +20,7 @@ class AppToast(private val view: TextView) {
     fun show(message: String, type: Type = Type.DEFAULT, durationMs: Long = 3000) {
         handler.removeCallbacks(hideRunnable)
         view.animate().cancel()
-        view.text = message
+        view.text = I18n.tr(message)
         view.setBackgroundResource(
             when (type) {
                 Type.SUCCESS -> R.drawable.bg_toast_success

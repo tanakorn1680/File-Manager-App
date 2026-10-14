@@ -249,7 +249,7 @@ class FilesScreen(private val ctx: AppContext) {
     private fun updateSelectBar() {
         selectBar.visibility = if (state.selectMode) View.VISIBLE else View.GONE
         fabAdd.visibility = if (state.selectMode) View.GONE else View.VISIBLE
-        textSelectCount.text = "${state.selected.size} selected"
+        textSelectCount.text = I18n.tr("${state.selected.size} selected")
     }
 
     private fun selectedEntries(): List<FileEntry> =
@@ -343,7 +343,7 @@ class FilesScreen(private val ctx: AppContext) {
                 val row = super.getView(position, convertView, parent) as TextView
                 val branch = getItem(position).orEmpty()
                 val active = branch == state.currentBranch
-                row.text = if (active) "$branch ✓" else branch
+                row.text = I18n.tr(if (active) "$branch ✓" else branch)
                 row.setTextColor(act.color(if (active) R.color.accent else R.color.text_primary))
                 row.typeface = if (active) Typeface.create("sans-serif-medium", Typeface.NORMAL) else Typeface.DEFAULT
                 return row
@@ -690,7 +690,7 @@ class FilesScreen(private val ctx: AppContext) {
         val (dialog, view) = Dialogs.create(act, R.layout.dialog_staged_commit)
 
         view.findViewById<TextView>(R.id.textStagedCount).text = count.toString()
-        view.findViewById<TextView>(R.id.textStagedPlural).text = if (count == 1) "file" else "files"
+        view.findViewById<TextView>(R.id.textStagedPlural).text = I18n.tr(if (count == 1) "file" else "files")
 
         // List of what will be committed, with the action of each change
         val actionLabel = mapOf("delete" to "Delete", "create" to "New", "upload" to "Upload", "edit" to "Edit")
@@ -704,7 +704,7 @@ class FilesScreen(private val ctx: AppContext) {
         }
         if (staged.size > MAX_STAGED_ROWS) {
             val row = inflater.inflate(R.layout.item_staged_file, rows, false)
-            row.findViewById<TextView>(R.id.textStagedName).text = "… and ${staged.size - MAX_STAGED_ROWS} more"
+            row.findViewById<TextView>(R.id.textStagedName).text = I18n.tr("… and ${staged.size - MAX_STAGED_ROWS} more")
             rows.addView(row)
         }
         if (count > 5) {

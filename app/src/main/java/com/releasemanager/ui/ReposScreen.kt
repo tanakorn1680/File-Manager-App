@@ -15,6 +15,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.button.MaterialButton
 import com.releasemanager.R
+import com.releasemanager.data.AppSettings
 import com.releasemanager.data.EditMode
 import com.releasemanager.data.RepoRef
 import com.releasemanager.data.RepoSortKey
@@ -43,10 +44,7 @@ class ReposScreen(private val ctx: AppContext) {
         list.layoutManager = LinearLayoutManager(ctx.activity)
         list.adapter = adapter
 
-        root.findViewById<ImageButton>(R.id.btnCreateRepo).setOnClickListener { openCreateRepoDialog() }
-        root.findViewById<ImageButton>(R.id.btnSortRepos).setOnClickListener { openSortSheet() }
-        root.findViewById<ImageButton>(R.id.btnRefreshRepos).setOnClickListener { load() }
-        root.findViewById<ImageButton>(R.id.btnDisconnect).setOnClickListener { confirmDisconnect() }
+        root.findViewById<ImageButton>(R.id.btnMenu).setOnClickListener { openMenuSheet() }
 
         inputSearch.onTextChanged { render() }
         inputSearch.setOnEditorActionListener { v, actionId, _ ->
@@ -92,6 +90,63 @@ class ReposScreen(private val ctx: AppContext) {
         }
         adapter.submitList(filtered.sortedForDisplay(state.repoSortKey, state.repoSortAsc))
         if (filtered.isEmpty()) stateView.showEmpty("No repositories found.") else stateView.hide()
+    }
+
+    // ── Menu (the 3-line button) ─────────────────────────────────────────────
+
+    private fun openMenuSheet() {
+        Dialogs.sheet(
+            ctx.activity,
+            "More options",
+            listOf(
+                Dialogs.SheetItem("New repository", R.drawable.ic_plus, onClick = { openCreateRepoDialog() }),
+                Dialogs.SheetItem("Sort", R.drawable.ic_sort, onClick = { openSortSheet() }),
+                Dialogs.SheetItem("Refresh", R.drawable.ic_refresh, onClick = { load() }),
+                Dialogs.SheetItem(
+                    "Settings", R.drawable.ic_settings,
+                    separatorBefore = true,
+                    onClick = { openSettingsSheet() }
+                ),
+                Dialogs.SheetItem(
+                    "Disconnect", R.drawable.ic_logout,
+                    danger = true,
+                    onClick = { confirmDisconnect() }
+                )
+            )
+        )
+    }
+
+    private fun openSettingsSheet() {
+        Dialogs.sheet(
+            ctx.activity,
+            "Settings",
+            listOf(
+                Dialogs.SheetItem(
+                    "Language", R.drawable.ic_globe,
+                    sub = if (I18n.isThai) "ไทย" else "English",
+                    onClick = { openLanguageSheet() }
+                )
+            )
+        )
+    }
+
+    private fun openLanguageSheet() {
+        fun item(code: String, name: String) = Dialogs.SheetItem(
+            (if (I18n.lang == code) "✓ " else "") + name, R.drawable.ic_globe,
+            onClick = { setLanguage(code) }
+        )
+        Dialogs.sheet(
+            ctx.activity,
+            "Language",
+            listOf(item(AppSettings.LANG_EN, "English"), item(AppSettings.LANG_TH, "ไทย"))
+        )
+    }
+
+    /** The texts are inflated per language, so the screen is rebuilt; the saved token reconnects on its own. */
+    private fun setLanguage(code: String) {
+        if (I18n.lang == code) return
+        I18n.setLanguage(ctx.activity, code)
+        ctx.activity.recreate()
     }
 
     // ── Sort ─────────────────────────────────────────────────────────────────
@@ -206,8 +261,8 @@ class ReposScreen(private val ctx: AppContext) {
 
     private fun confirmVisibility(repo: RepoRef) {
         val toPrivate = !repo.private
-        val current = if (repo.private) "Private" else "Public"
-        val target = if (toPrivate) "Private" else "Public"
+        val current = I18n.tr(if (repo.private) "Private" else "Public")
+        val target = I18n.tr(if (toPrivate) "Private" else "Public")
         val warning = if (toPrivate) {
             "The repository will no longer be publicly accessible."
         } else {
@@ -216,13 +271,13 @@ class ReposScreen(private val ctx: AppContext) {
 
         val body = SpannableStringBuilder()
         body.appendBold(repo.fullName.repoShortName())
-        body.append("\n\nCurrent: ")
+        body.append("\n\n" + I18n.tr("Current:") + " ")
         body.appendBold(current)
         body.append(" → ")
         body.appendBold(target)
         body.append("\n\n")
         val warnStart = body.length
-        body.append(warning)
+        body.append(I18n.tr(warning))
         body.setSpan(
             ForegroundColorSpan(ctx.activity.color(R.color.text_muted)),
             warnStart, body.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
@@ -295,7 +350,7 @@ class ReposScreen(private val ctx: AppContext) {
         val btnCreate = view.findViewById<MaterialButton>(R.id.btnPositive)
 
         // "Repository name *" with the star in the danger colour
-        label.text = SpannableStringBuilder("Repository name ").also {
+        label.text = SpannableStringBuilder(I18n.tr("Repository name ")).also {
             val start = it.length
             it.append("*")
             it.setSpan(
@@ -310,11 +365,11 @@ class ReposScreen(private val ctx: AppContext) {
             when {
                 value.isEmpty() -> hint.text = ""
                 NAME_REGEX.matches(value) -> {
-                    hint.text = "✓ Valid name"
+                    hint.text = I18n.tr("✓ Valid name")
                     hint.setTextColor(ctx.activity.color(R.color.success))
                 }
                 else -> {
-                    hint.text = "Use letters, numbers, hyphens, underscores, or dots only."
+                    hint.text = I18n.tr("Use letters, numbers, hyphens, underscores, or dots only.")
                     hint.setTextColor(ctx.activity.color(R.color.danger))
                 }
             }
@@ -377,10 +432,18 @@ class ReposScreen(private val ctx: AppContext) {
         val btnCancel = view.findViewById<MaterialButton>(R.id.btnNegative)
         val btnDelete = view.findViewById<MaterialButton>(R.id.btnPositive)
 
-        bodyText.text = SpannableStringBuilder("This will permanently delete ").also {
-            it.appendBold("\"$shortName\"")
-            it.append(" and all its contents. ")
-            it.appendBold("This cannot be undone.")
+        bodyText.text = SpannableStringBuilder().also {
+            if (I18n.isThai) {
+                it.append("จะลบ ")
+                it.appendBold("\"$shortName\"")
+                it.append(" และเนื้อหาทั้งหมดอย่างถาวร ")
+                it.appendBold("ไม่สามารถย้อนกลับได้")
+            } else {
+                it.append("This will permanently delete ")
+                it.appendBold("\"$shortName\"")
+                it.append(" and all its contents. ")
+                it.appendBold("This cannot be undone.")
+            }
         }
         input.hint = shortName
         btnDelete.isEnabled = false

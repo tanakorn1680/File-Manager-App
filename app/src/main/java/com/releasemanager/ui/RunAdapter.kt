@@ -68,7 +68,7 @@ class RunAdapter(
             else -> R.drawable.ic_status_neutral to R.color.text_dim
         }
 
-        fun statusLabel(run: WorkflowRun): String = when {
+        fun statusLabel(run: WorkflowRun): String = I18n.tr(when {
             run.status == "queued" || run.status == "waiting" || run.status == "pending" || run.status == "requested" -> "Queued"
             run.status != "completed" -> "In progress"
             run.conclusion == "success" -> "Success"
@@ -79,6 +79,6 @@ class RunAdapter(
             run.conclusion == "skipped" -> "Skipped"
             run.conclusion == "action_required" -> "Action required"
             else -> run.conclusion.orEmpty().replace('_', ' ').replaceFirstChar { it.uppercase() }
-        }
+        })
     }
 }

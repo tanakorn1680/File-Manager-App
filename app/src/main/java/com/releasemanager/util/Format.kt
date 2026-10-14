@@ -1,5 +1,6 @@
 package com.releasemanager.util
 
+import com.releasemanager.ui.I18n
 import java.time.Duration
 import java.time.Instant
 import java.time.ZoneId
@@ -25,10 +26,10 @@ fun formatTimeAgo(iso: String, now: Instant = Instant.now()): String {
     }
     val seconds = Duration.between(then, now).seconds.coerceAtLeast(0)
     return when {
-        seconds < 60 -> "just now"
-        seconds < 3_600 -> "${seconds / 60}m ago"
-        seconds < 86_400 -> "${seconds / 3_600}h ago"
-        seconds < 30 * 86_400L -> "${seconds / 86_400}d ago"
+        seconds < 60 -> I18n.tr("just now")
+        seconds < 3_600 -> I18n.tr("${seconds / 60}m ago")
+        seconds < 86_400 -> I18n.tr("${seconds / 3_600}h ago")
+        seconds < 30 * 86_400L -> I18n.tr("${seconds / 86_400}d ago")
         else -> then.atZone(ZoneId.systemDefault()).toLocalDate().toString()
     }
 }

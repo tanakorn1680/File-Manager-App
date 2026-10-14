@@ -171,7 +171,7 @@ class ActionsScreen(private val ctx: AppContext) {
             override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
                 val row = super.getView(position, convertView, parent) as TextView
                 val active = position == current
-                row.text = if (active) "${labels[position]} ✓" else labels[position]
+                row.text = I18n.tr(if (active) "${labels[position]} ✓" else labels[position])
                 row.setTextColor(act.color(if (active) R.color.accent else R.color.text_primary))
                 row.typeface = if (active) Typeface.create("sans-serif-medium", Typeface.NORMAL) else Typeface.DEFAULT
                 return row
@@ -209,7 +209,7 @@ class ActionsScreen(private val ctx: AppContext) {
         val textError = view.findViewById<TextView>(R.id.textRunError)
         val btnCancel = view.findViewById<MaterialButton>(R.id.btnNegative)
         val btnStart = view.findViewById<MaterialButton>(R.id.btnPositive)
-        view.findViewById<TextView>(R.id.textRunWorkflow).text = "${workflow.name} · ${workflow.fileName}"
+        view.findViewById<TextView>(R.id.textRunWorkflow).text = I18n.tr("${workflow.name} · ${workflow.fileName}")
 
         var branches = listOf(state.currentBranch)
         var branch = state.currentBranch
@@ -224,19 +224,19 @@ class ActionsScreen(private val ctx: AppContext) {
             container.removeAllViews()
             btnStart.isEnabled = false
             textError.visibility = View.GONE
-            textStatus.text = "Reading the workflow's inputs…"
+            textStatus.text = I18n.tr("Reading the workflow's inputs…")
             textStatus.visibility = View.VISIBLE
             val ref = branch
             inputsJob = ctx.launchSafe(onError = { e ->
-                textStatus.text = "Could not read ${workflow.fileName} on \"$ref\": ${e.userMessage()}"
+                textStatus.text = I18n.tr("Could not read ${workflow.fileName} on \"$ref\": ${e.userMessage()}")
             }) {
                 val info = api.getDispatchInfo(repo, workflow.path, ref)
                 if (!info.manual) {
-                    textStatus.text = "${workflow.fileName} on \"$ref\" has no workflow_dispatch trigger, so it cannot be run by hand."
+                    textStatus.text = I18n.tr("${workflow.fileName} on \"$ref\" has no workflow_dispatch trigger, so it cannot be run by hand.")
                     return@launchSafe
                 }
                 info.inputs.forEach { addField(container, fields, it) }
-                textStatus.text = if (info.inputs.isEmpty()) "This workflow takes no inputs." else ""
+                textStatus.text = I18n.tr(if (info.inputs.isEmpty()) "This workflow takes no inputs." else "")
                 textStatus.visibility = if (info.inputs.isEmpty()) View.VISIBLE else View.GONE
                 btnStart.isEnabled = true
             }
@@ -270,21 +270,21 @@ class ActionsScreen(private val ctx: AppContext) {
             }
             val firstMissing = missing
             if (firstMissing != null) {
-                textError.text = "\"${firstMissing.removeSuffix(" *")}\" is required."
+                textError.text = I18n.tr("\"${firstMissing.removeSuffix(" *")}\" is required.")
                 textError.visibility = View.VISIBLE
                 return@setOnClickListener
             }
 
             running = true
             btnStart.isEnabled = false
-            btnStart.text = "Starting…"
+            btnStart.text = I18n.tr("Starting…")
             textError.visibility = View.GONE
             view.hideKeyboard()
             val ref = branch
             ctx.launchSafe(onError = { e ->
                 running = false
                 btnStart.isEnabled = true
-                btnStart.text = "Run workflow"
+                btnStart.text = I18n.tr("Run workflow")
                 textError.text = dispatchError(e)
                 textError.visibility = View.VISIBLE
             }) {

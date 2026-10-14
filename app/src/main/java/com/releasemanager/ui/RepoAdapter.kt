@@ -56,11 +56,11 @@ class RepoAdapter(
             .filter { it.isNotEmpty() }.joinToString(" · ")
 
         if (repo.private) {
-            holder.textBadge.text = "Private"
+            holder.textBadge.text = I18n.tr("Private")
             holder.textBadge.setBackgroundResource(R.drawable.bg_badge_private)
             holder.textBadge.setTextColor(ctx.color(R.color.danger))
         } else {
-            holder.textBadge.text = "Public"
+            holder.textBadge.text = I18n.tr("Public")
             holder.textBadge.setBackgroundResource(R.drawable.bg_badge_public)
             holder.textBadge.setTextColor(ctx.color(R.color.success))
         }

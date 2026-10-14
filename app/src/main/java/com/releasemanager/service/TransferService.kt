@@ -18,6 +18,7 @@ import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import com.releasemanager.R
 import com.releasemanager.ui.MainActivity
+import com.releasemanager.ui.I18n
 import com.releasemanager.ui.userMessage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -65,6 +66,7 @@ class TransferService : Service(), TransferManager.Listener {
 
     override fun onCreate() {
         super.onCreate()
+        I18n.init(this)
         nm = getSystemService(NotificationManager::class.java)
         createChannels()
         TransferManager.addListener(this)
@@ -233,8 +235,8 @@ class TransferService : Service(), TransferManager.Listener {
             .setSmallIcon(icon(t))
             .setLargeIcon(NotifIcons.logo(this))
             .setColor(ContextCompat.getColor(this, R.color.warning_text))
-            .setContentTitle("${verb(t)} ${t.title}")
-            .setContentText(t.label.ifBlank { "Starting…" })
+            .setContentTitle("${I18n.tr(verb(t))} ${t.title}")
+            .setContentText(I18n.tr(t.label.ifBlank { "Starting…" }))
             .setContentIntent(openApp())
             .setOngoing(true)
             .setOnlyAlertOnce(true)
@@ -242,7 +244,7 @@ class TransferService : Service(), TransferManager.Listener {
             .setCategory(NotificationCompat.CATEGORY_PROGRESS)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
-            .addAction(0, if (t.kind == TransferKind.WATCH) "Stop watching" else "Cancel", cancelIntent(t))
+            .addAction(0, I18n.tr(if (t.kind == TransferKind.WATCH) "Stop watching" else "Cancel"), cancelIntent(t))
         if (t.fraction >= 0f) {
             val pct = (t.fraction * 100).toInt().coerceIn(0, 100)
             b.setProgress(100, pct, false).setSubText("$pct%")
@@ -258,15 +260,15 @@ class TransferService : Service(), TransferManager.Listener {
         val noun = if (t.kind == TransferKind.UPLOAD) "Upload" else "Download"
         // A watch already carries a full sentence ("Build APK #12 failed"); the repo name goes in front of it
         val text = when {
-            watch -> "${t.title} · ${t.message ?: if (ok) "succeeded" else "failed"}"
-            ok -> t.message ?: t.title
-            else -> "${t.title}: ${t.message ?: "error"}"
+            watch -> "${t.title} · ${I18n.tr(t.message ?: if (ok) "succeeded" else "failed")}"
+            ok -> t.message?.let { I18n.tr(it) } ?: t.title
+            else -> "${t.title}: ${I18n.tr(t.message ?: "error")}"
         }
         return NotificationCompat.Builder(this, CHANNEL_DONE)
             .setSmallIcon(icon(t))
             .setLargeIcon(NotifIcons.result(this, ok))
             .setColor(ContextCompat.getColor(this, if (ok) R.color.success else R.color.danger))
-            .setContentTitle(if (watch) (if (ok) "Build succeeded" else "Build failed") else if (ok) "$noun complete" else "$noun failed")
+            .setContentTitle(I18n.tr(if (watch) (if (ok) "Build succeeded" else "Build failed") else if (ok) "$noun complete" else "$noun failed"))
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setContentIntent(openApp())

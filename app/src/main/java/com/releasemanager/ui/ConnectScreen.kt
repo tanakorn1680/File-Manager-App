@@ -79,7 +79,7 @@ class ConnectScreen(private val ctx: AppContext) {
     private fun setConnecting(value: Boolean) {
         connecting = value
         btnConnect.isEnabled = !value
-        btnConnect.text = if (value) "Connecting…" else "Connect"
+        btnConnect.text = I18n.tr(if (value) "Connecting…" else "Connect")
     }
 
     private fun showStatus(message: String, isError: Boolean) {

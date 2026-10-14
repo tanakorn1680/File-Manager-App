@@ -29,7 +29,7 @@ class StateView(root: View) {
         spinner.visibility = View.VISIBLE
         icon.visibility = View.GONE
         retry.visibility = View.GONE
-        text.text = message
+        text.text = I18n.tr(message)
         container.visibility = View.VISIBLE
     }
 
@@ -37,7 +37,7 @@ class StateView(root: View) {
         spinner.visibility = View.GONE
         icon.setImageResource(R.drawable.ic_alert_circle)
         icon.visibility = View.VISIBLE
-        text.text = message
+        text.text = I18n.tr(message)
         if (onRetry != null) {
             retry.visibility = View.VISIBLE
             retry.setOnClickListener { onRetry() }
@@ -56,7 +56,7 @@ class StateView(root: View) {
         } else {
             icon.visibility = View.GONE
         }
-        text.text = message
+        text.text = I18n.tr(message)
         container.visibility = View.VISIBLE
     }
 

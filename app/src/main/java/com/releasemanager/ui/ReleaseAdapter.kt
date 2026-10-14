@@ -41,7 +41,7 @@ class ReleaseAdapter(
         holder.textDraft.visibility = if (release.draft) View.VISIBLE else View.GONE
         holder.textPrerelease.visibility = if (release.prerelease) View.VISIBLE else View.GONE
         val count = release.assets.size
-        holder.textAssetCount.text = if (count == 1) "1 asset" else "$count assets"
+        holder.textAssetCount.text = I18n.tr(if (count == 1) "1 asset" else "$count assets")
         holder.itemView.setOnClickListener { onClick(release) }
     }
 

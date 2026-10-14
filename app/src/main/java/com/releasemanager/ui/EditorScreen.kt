@@ -569,7 +569,7 @@ class EditorScreen(private val ctx: AppContext) {
     private fun setReplaceVisible(show: Boolean) {
         replaceRow.visibility = if (show) View.VISIBLE else View.GONE
         btnToggleReplace.rotation = if (show) 180f else 0f
-        btnToggleReplace.contentDescription = if (show) "Hide replace" else "Show replace"
+        btnToggleReplace.contentDescription = I18n.tr(if (show) "Hide replace" else "Show replace")
         if (show) replaceInput.requestFocus()
     }
 
@@ -678,7 +678,7 @@ class EditorScreen(private val ctx: AppContext) {
             currentMatch >= 0 -> "${currentMatch + 1} of $total" to R.color.text_muted
             else -> "Results: $total" to R.color.text_muted
         }
-        findResults.text = text
+        findResults.text = I18n.tr(text)
         findResults.setTextColor(act.color(colorRes))
         val usable = matches.count > 0
         for (b in listOf(btnFindPrev, btnFindNext, btnReplaceOne, btnReplaceAll)) b.alpha = if (usable) 1f else 0.4f

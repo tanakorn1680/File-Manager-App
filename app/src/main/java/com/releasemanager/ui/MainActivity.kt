@@ -197,11 +197,26 @@ class MainActivity : AppCompatActivity() {
     // ── Navigation ───────────────────────────────────────────────────────────
 
     fun showScreen(screen: Screen) {
+        val previous = current
         current = screen
         for ((s, view) in roots) {
             view.visibility = if (s == screen) View.VISIBLE else View.GONE
         }
         window.decorView.hideKeyboard()
+        if (previous != screen) refreshOnReturn(previous, screen)
+    }
+
+    /**
+     * Coming back to a list page (Back from a repo, or from Releases/Actions/History) refreshes it once
+     * automatically. Pages opened with their own button already load in enter(), and an upload reloads
+     * the file list by itself when it finishes.
+     */
+    private fun refreshOnReturn(from: Screen, to: Screen) {
+        when (to) {
+            Screen.REPOS -> if (from == Screen.FILES) ctx.repos.load()
+            Screen.FILES -> if (from == Screen.RELEASES || from == Screen.ACTIONS || from == Screen.HISTORY) ctx.files.loadFiles()
+            else -> Unit
+        }
     }
 
     /** System Back = the on-screen back arrow of the visible screen. */

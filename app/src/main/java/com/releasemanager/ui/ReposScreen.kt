@@ -191,6 +191,10 @@ class ReposScreen(private val ctx: AppContext) {
             listOf(
                 Dialogs.SheetItem("Open", R.drawable.ic_arrow_right, onClick = { openRepo(repo) }),
                 Dialogs.SheetItem(
+                    "Details", R.drawable.ic_repo,
+                    onClick = { RepoDetailsSheet.show(ctx, repo) }
+                ),
+                Dialogs.SheetItem(
                     "Download as ZIP", R.drawable.ic_download,
                     onClick = { downloadRepoZip(repo) }
                 ),

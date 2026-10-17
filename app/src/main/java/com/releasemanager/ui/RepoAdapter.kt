@@ -31,6 +31,8 @@ class RepoAdapter(
         val textDesc: TextView = view.findViewById(R.id.textRepoDesc)
         val textBadge: TextView = view.findViewById(R.id.textBadge)
         val textMeta: TextView = view.findViewById(R.id.textRepoMeta)
+        val dotLang: View = view.findViewById(R.id.viewLangDot)
+        val textLang: TextView = view.findViewById(R.id.textRepoLang)
         val btnEdit: ImageButton = view.findViewById(R.id.btnRepoEdit)
         val btnMore: ImageButton = view.findViewById(R.id.btnRepoMore)
     }
@@ -52,8 +54,22 @@ class RepoAdapter(
             holder.textDesc.visibility = View.VISIBLE
         }
 
-        holder.textMeta.text = listOf(formatSize(repo.sizeKb * 1024), formatTimeAgo(repo.updatedAt))
-            .filter { it.isNotEmpty() }.joinToString(" · ")
+        holder.textMeta.text = listOf(
+            if (repo.stars > 0) "★ ${repo.stars}" else "",
+            formatSize(repo.sizeKb * 1024),
+            formatTimeAgo(repo.updatedAt)
+        ).filter { it.isNotEmpty() }.joinToString(" · ")
+
+        val lang = repo.language
+        if (lang.isNullOrBlank()) {
+            holder.dotLang.visibility = View.GONE
+            holder.textLang.visibility = View.GONE
+        } else {
+            holder.dotLang.background = ovalDrawable(languageColor(lang))
+            holder.textLang.text = lang
+            holder.dotLang.visibility = View.VISIBLE
+            holder.textLang.visibility = View.VISIBLE
+        }
 
         if (repo.private) {
             holder.textBadge.text = I18n.tr("Private")

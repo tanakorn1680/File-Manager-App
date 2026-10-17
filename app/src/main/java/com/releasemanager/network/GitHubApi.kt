@@ -7,6 +7,11 @@ import com.releasemanager.data.FileEntry
 import com.releasemanager.data.GitHubApiException
 import com.releasemanager.data.CommitInfo
 import com.releasemanager.data.GitHubUser
+import com.releasemanager.data.LatestDeployment
+import com.releasemanager.data.LatestRelease
+import com.releasemanager.data.RepoContributor
+import com.releasemanager.data.RepoDetails
+import com.releasemanager.data.RepoLanguage
 import com.releasemanager.data.JobLog
 import com.releasemanager.data.Release
 import com.releasemanager.data.ReleaseAsset
@@ -21,6 +26,8 @@ import com.releasemanager.util.copyStream
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -254,6 +261,93 @@ class GitHubApi(private val token: String) {
         ).get().build()
         val arr = executeArray(req)
         return (0 until arr.length()).map { i -> parseRepo(arr.getJSONObject(i)) }
+    }
+
+    /** One slice of [getRepoDetails]: its value, or the error that kept it from loading. */
+    private class Part<T>(val value: T?, val error: Exception?)
+
+    private suspend fun <T> part(block: suspend () -> T?): Part<T> =
+        try {
+            Part(block(), null)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Part(null, e)
+        }
+
+    /**
+     * Languages, contributors, latest release and latest deployment of a repository, loaded in parallel.
+     * A slice that fails (e.g. a token without access to deployments) is left out; the call only fails
+     * when every slice failed.
+     */
+    suspend fun getRepoDetails(repo: String): RepoDetails = coroutineScope {
+        val languages = async { part { fetchLanguages(repo) } }
+        val people = async { part { fetchContributors(repo) } }
+        val release = async { part { fetchLatestRelease(repo) } }
+        val deployment = async { part { fetchLatestDeployment(repo) } }
+        val l = languages.await()
+        val c = people.await()
+        val r = release.await()
+        val d = deployment.await()
+        val errors = listOfNotNull(l.error, c.error, r.error, d.error)
+        if (errors.size == 4) throw errors.first()
+        RepoDetails(l.value ?: emptyList(), c.value ?: emptyList(), r.value, d.value)
+    }
+
+    private suspend fun fetchLanguages(repo: String): List<RepoLanguage> {
+        val o = call(authedRequest("https://api.github.com/repos/$repo/languages").get().build()) as? JSONObject
+            ?: return emptyList()
+        return o.keys().asSequence()
+            .map { RepoLanguage(it, o.optLong(it)) }
+            .filter { it.bytes > 0 }
+            .sortedByDescending { it.bytes }
+            .toList()
+    }
+
+    private suspend fun fetchContributors(repo: String): List<RepoContributor> {
+        // 204 (empty repository) comes back as null
+        val arr = call(authedRequest("https://api.github.com/repos/$repo/contributors?per_page=10").get().build()) as? JSONArray
+            ?: return emptyList()
+        return (0 until arr.length()).mapNotNull { i ->
+            val o = arr.optJSONObject(i) ?: return@mapNotNull null
+            val login = optStr(o, "login") ?: return@mapNotNull null
+            RepoContributor(login, o.optInt("contributions"))
+        }
+    }
+
+    private suspend fun fetchLatestRelease(repo: String): LatestRelease? {
+        var o: JSONObject? = null
+        try {
+            o = call(authedRequest("https://api.github.com/repos/$repo/releases/latest").get().build()) as? JSONObject
+        } catch (e: GitHubApiException) {
+            if (e.httpStatus != 404) throw e   // 404 = no release published
+        }
+        if (o == null) return null
+        return LatestRelease(
+            tag = optStr(o, "tag_name") ?: "",
+            name = optStr(o, "name"),
+            publishedAt = optStr(o, "published_at") ?: optStr(o, "created_at") ?: "",
+            prerelease = o.optBoolean("prerelease")
+        )
+    }
+
+    private suspend fun fetchLatestDeployment(repo: String): LatestDeployment? {
+        val list = call(authedRequest("https://api.github.com/repos/$repo/deployments?per_page=1").get().build()) as? JSONArray
+        val d = list?.optJSONObject(0) ?: return null
+        var statuses: JSONArray? = null
+        try {
+            statuses = call(
+                authedRequest("https://api.github.com/repos/$repo/deployments/${d.optLong("id")}/statuses?per_page=1").get().build()
+            ) as? JSONArray
+        } catch (e: GitHubApiException) {
+            // The environment is still worth showing without its state
+        }
+        val state = statuses?.optJSONObject(0)?.let { optStr(it, "state") } ?: ""
+        return LatestDeployment(
+            environment = optStr(d, "environment") ?: "",
+            state = state,
+            createdAt = optStr(d, "created_at") ?: ""
+        )
     }
 
     suspend fun createRepo(name: String, description: String, isPrivate: Boolean, autoInit: Boolean): RepoRef {
@@ -1021,7 +1115,10 @@ class GitHubApi(private val token: String) {
         description = optStr(o, "description"),
         defaultBranch = optStr(o, "default_branch") ?: "main",
         sizeKb = o.optLong("size", 0L),
-        updatedAt = optStr(o, "pushed_at") ?: optStr(o, "updated_at") ?: ""
+        updatedAt = optStr(o, "pushed_at") ?: optStr(o, "updated_at") ?: "",
+        language = optStr(o, "language"),
+        stars = o.optInt("stargazers_count", 0),
+        forks = o.optInt("forks_count", 0)
     )
 
     private fun parseRun(o: JSONObject): WorkflowRun = WorkflowRun(

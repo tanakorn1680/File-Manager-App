@@ -417,5 +417,15 @@ internal val TH_STRINGS: Map<String, String> = mapOf(
     "Transfer results" to "ผลการส่งไฟล์",
     "Shown when an upload or download finishes or fails" to "แสดงเมื่อการอัปโหลดหรือดาวน์โหลดเสร็จสิ้นหรือล้มเหลว",
     "%s complete" to "%s เสร็จสมบูรณ์",
-    "%s failed" to "%s ล้มเหลว"
+    "%s failed" to "%s ล้มเหลว",
+
+    // ── Repository details ──
+    "Details" to "รายละเอียด",
+    "Stars" to "ดาว",
+    "Forks" to "Fork",
+    "Contributors" to "ผู้ร่วมพัฒนา",
+    "Languages" to "ภาษาโปรแกรม",
+    "Updated" to "อัปเดต",
+    "No releases published" to "ยังไม่มี release",
+    "Inactive" to "ไม่ใช้งาน"
 )

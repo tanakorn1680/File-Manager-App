@@ -29,7 +29,28 @@ data class RepoRef(
     val description: String? = null,
     val defaultBranch: String = "main",
     val sizeKb: Long = 0,           // GitHub reports repo size in KB
-    val updatedAt: String = ""      // pushed_at (falls back to updated_at); ISO-8601 sorts as text
+    val updatedAt: String = "",     // pushed_at (falls back to updated_at); ISO-8601 sorts as text
+    val language: String? = null,   // main language GitHub detected (null for an empty repo)
+    val stars: Int = 0,
+    val forks: Int = 0
+)
+
+/** One language of a repository with the bytes of code written in it (GET /repos/:repo/languages). */
+data class RepoLanguage(val name: String, val bytes: Long)
+
+data class RepoContributor(val login: String, val contributions: Int)
+
+data class LatestRelease(val tag: String, val name: String?, val publishedAt: String, val prerelease: Boolean)
+
+/** Newest deployment of a repository and the state of its newest status (success, failure, in_progress, ...). */
+data class LatestDeployment(val environment: String, val state: String, val createdAt: String)
+
+/** What the repo details sheet shows besides the fields already in [RepoRef]. */
+data class RepoDetails(
+    val languages: List<RepoLanguage>,
+    val contributors: List<RepoContributor>,
+    val release: LatestRelease?,
+    val deployment: LatestDeployment?
 )
 
 data class GitHubUser(

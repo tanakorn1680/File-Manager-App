@@ -13,6 +13,7 @@ import android.widget.TextView
 import androidx.appcompat.widget.SwitchCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.google.android.material.button.MaterialButton
 import com.releasemanager.R
 import com.releasemanager.data.AppSettings
@@ -31,6 +32,7 @@ class ReposScreen(private val ctx: AppContext) {
     private val inputSearch: EditText = root.findViewById(R.id.inputSearch)
     private val list: RecyclerView = root.findViewById(R.id.listRepos)
     private val stateView = StateView(root)
+    private val swipe: SwipeRefreshLayout = root.findViewById(R.id.swipeRepos)
 
     private val adapter = RepoAdapter(
         onOpen = { openRepo(it) },
@@ -43,6 +45,7 @@ class ReposScreen(private val ctx: AppContext) {
     init {
         list.layoutManager = LinearLayoutManager(ctx.activity)
         list.adapter = adapter
+        swipe.setup(list) { load(silent = true) }
 
         root.findViewById<ImageButton>(R.id.btnMenu).setOnClickListener { openMenuSheet() }
 
@@ -71,14 +74,22 @@ class ReposScreen(private val ctx: AppContext) {
 
     // ── Loading / rendering ──────────────────────────────────────────────────
 
-    fun load() {
+    /** [silent] (pull-to-refresh) keeps the list on screen while it reloads instead of showing the loading state. */
+    fun load(silent: Boolean = false) {
         val api = ctx.api ?: return
-        stateView.showLoading("Loading repositories…")
-        adapter.submitList(emptyList())
+        if (!silent) {
+            swipe.isRefreshing = false
+            stateView.showLoading("Loading repositories…")
+            adapter.submitList(emptyList())
+        }
         loadJob?.cancel()
-        loadJob = ctx.launchSafe(onError = { stateView.showError(it.userMessage()) { load() } }) {
+        loadJob = ctx.launchSafe(onError = {
+            swipe.isRefreshing = false
+            if (silent) ctx.toast.error(it.userMessage()) else stateView.showError(it.userMessage()) { load() }
+        }) {
             state.repos = api.listRepos()
             render()
+            swipe.isRefreshing = false
         }
     }
 

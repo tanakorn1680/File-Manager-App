@@ -8,6 +8,7 @@ import android.widget.ImageButton
 import android.widget.TextView
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.releasemanager.R
 import com.releasemanager.data.CommitInfo
 import com.releasemanager.data.HistoryNames
@@ -27,6 +28,7 @@ class HistoryScreen(private val ctx: AppContext) {
     private val textTitle: TextView = root.findViewById(R.id.textTitle)
     private val list: RecyclerView = root.findViewById(R.id.listHistory)
     private val stateView = StateView(root)
+    private val swipe: SwipeRefreshLayout = root.findViewById(R.id.swipeHistory)
     private val names = HistoryNames(act)
 
     private val commits = mutableListOf<CommitInfo>()
@@ -53,6 +55,7 @@ class HistoryScreen(private val ctx: AppContext) {
             }
         })
 
+        swipe.setup(list) { load(silent = true) }
         root.findViewById<ImageButton>(R.id.btnBack).setOnClickListener { ctx.show(Screen.FILES) }
         root.findViewById<ImageButton>(R.id.btnRefreshHistory).setOnClickListener { load() }
         root.findViewById<ImageButton>(R.id.btnUndoLast).setOnClickListener { undoLast() }
@@ -64,25 +67,35 @@ class HistoryScreen(private val ctx: AppContext) {
         load()
     }
 
-    fun load() {
+    fun load(silent: Boolean = false) {
         val api = ctx.api ?: return
         val repo = state.currentRepo ?: return
         val branch = state.currentBranch
 
-        stateView.showLoading()
-        commits.clear()
-        adapter.submitList(emptyList())
-        page = 1
-        hasMore = true
-        loadingMore = false
+        if (!silent) {
+            swipe.isRefreshing = false
+            stateView.showLoading()
+            commits.clear()
+            adapter.submitList(emptyList())
+            page = 1
+            hasMore = true
+            loadingMore = false
+        }
         loadJob?.cancel()
         moreJob?.cancel()
-        loadJob = ctx.launchSafe(onError = { stateView.showError(it.userMessage()) { load() } }) {
+        loadJob = ctx.launchSafe(onError = {
+            swipe.isRefreshing = false
+            if (silent) ctx.toast.error(it.userMessage()) else stateView.showError(it.userMessage()) { load() }
+        }) {
             val first = api.listCommits(repo, branch, 1, PAGE_SIZE)
+            commits.clear()
             commits.addAll(first)
+            page = 1
             hasMore = first.size >= PAGE_SIZE
+            loadingMore = false
             adapter.submitList(commits.toList())
             if (commits.isEmpty()) stateView.showEmpty("No commits yet.") else stateView.hide()
+            swipe.isRefreshing = false
         }
     }
 

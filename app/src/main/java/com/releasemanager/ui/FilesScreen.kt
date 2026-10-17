@@ -23,6 +23,7 @@ import androidx.appcompat.widget.ListPopupWindow
 import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.releasemanager.R
@@ -53,6 +54,7 @@ class FilesScreen(private val ctx: AppContext) {
     private val act = ctx.activity
     private val state = ctx.state
     private val root: View = act.findViewById(R.id.screenFiles)
+    private val swipe: SwipeRefreshLayout = root.findViewById(R.id.swipeFiles)
     private val textTitle: TextView = root.findViewById(R.id.textTitle)
     private val textBranch: TextView = root.findViewById(R.id.textBranch)
     private val btnBranch: View = root.findViewById(R.id.btnBranch)
@@ -80,6 +82,7 @@ class FilesScreen(private val ctx: AppContext) {
     init {
         list.layoutManager = LinearLayoutManager(act)
         list.adapter = adapter
+        swipe.setup(list) { loadFiles(silent = true) }
 
         root.findViewById<ImageButton>(R.id.btnBack).setOnClickListener { onBack() }
         btnBranch.setOnClickListener { showBranchDropdown() }
@@ -129,19 +132,23 @@ class FilesScreen(private val ctx: AppContext) {
     }
 
     /** Web: loadFiles(). [onLoaded] runs once the listing is on screen. */
-    fun loadFiles(onLoaded: (() -> Unit)? = null) {
+    fun loadFiles(silent: Boolean = false, onLoaded: (() -> Unit)? = null) {
         val api = ctx.api ?: return
         val repo = state.currentRepo ?: return
         val branch = state.currentBranch
         val path = state.currentPath
 
         updateBreadcrumb()
-        stateView.showLoading()
-        display = emptyList()
-        adapter.submitList(display)
+        if (!silent) {
+            swipe.isRefreshing = false
+            stateView.showLoading()
+            display = emptyList()
+            adapter.submitList(display)
+        }
 
         loadJob?.cancel() // a slower, older load must not overwrite a newer one
         loadJob = ctx.launchSafe(onError = { e ->
+            swipe.isRefreshing = false
             if (e is GitHubApiException && e.httpStatus == 404 && path.isNotEmpty() && hasStagedUnder(path)) {
                 // A folder that only exists in the Stage Mode queue (new folder) has nothing on GitHub yet
                 state.files = emptyList()
@@ -151,11 +158,12 @@ class FilesScreen(private val ctx: AppContext) {
                 val msg = e.userMessage()
                 val is404 = msg.contains("404") || msg.lowercase().contains("not found")
                 val shown = if (is404 && path.isEmpty()) "Repository is empty or branch not found." else msg
-                stateView.showError(shown) { loadFiles() }
+                if (silent) ctx.toast.error(shown) else stateView.showError(shown) { loadFiles() }
             }
         }) {
             state.files = api.getTree(repo, path, branch)
             renderFiles()
+            swipe.isRefreshing = false
             onLoaded?.invoke()
         }
     }

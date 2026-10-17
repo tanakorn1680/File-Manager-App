@@ -5,6 +5,7 @@ import android.view.View
 import android.widget.ImageButton
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.releasemanager.R
 import com.releasemanager.data.Release
 import kotlinx.coroutines.Job
@@ -15,6 +16,7 @@ class ReleasesScreen(private val ctx: AppContext) {
     private val act = ctx.activity
     private val state = ctx.state
     private val root: View = act.findViewById(R.id.screenReleases)
+    private val swipe: SwipeRefreshLayout = root.findViewById(R.id.swipeReleases)
     private val list: RecyclerView = root.findViewById(R.id.listReleases)
     private val stateView = StateView(root)
 
@@ -25,6 +27,7 @@ class ReleasesScreen(private val ctx: AppContext) {
     init {
         list.layoutManager = LinearLayoutManager(act)
         list.adapter = adapter
+        swipe.setup(list) { load(silent = true) }
 
         root.findViewById<ImageButton>(R.id.btnBack).setOnClickListener { ctx.show(Screen.FILES) }
         root.findViewById<ImageButton>(R.id.btnNewRelease).setOnClickListener { ctx.releaseNew.open() }
@@ -37,15 +40,22 @@ class ReleasesScreen(private val ctx: AppContext) {
     }
 
     /** Web: loadReleases(). */
-    fun load() {
+    fun load(silent: Boolean = false) {
         val api = ctx.api ?: return
         val repo = state.currentRepo ?: return
-        stateView.showLoading()
-        adapter.submitList(emptyList())
+        if (!silent) {
+            swipe.isRefreshing = false
+            stateView.showLoading()
+            adapter.submitList(emptyList())
+        }
         loadJob?.cancel()
-        loadJob = ctx.launchSafe(onError = { stateView.showError(it.userMessage()) { load() } }) {
+        loadJob = ctx.launchSafe(onError = {
+            swipe.isRefreshing = false
+            if (silent) ctx.toast.error(it.userMessage()) else stateView.showError(it.userMessage()) { load() }
+        }) {
             state.releases = api.listReleases(repo)
             render()
+            swipe.isRefreshing = false
         }
     }
 

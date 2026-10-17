@@ -8,6 +8,9 @@ import android.view.inputmethod.InputMethodManager
 import android.webkit.MimeTypeMap
 import android.widget.EditText
 import androidx.core.content.ContextCompat
+import androidx.recyclerview.widget.RecyclerView
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+import com.releasemanager.R
 
 /** dp → px, rounded (used where a size cannot be expressed in XML). */
 fun Context.dp(value: Int): Int = (value * resources.displayMetrics.density + 0.5f).toInt()
@@ -40,3 +43,14 @@ fun Throwable.userMessage(): String =
 
 /** Last path segment of "owner/repo" (web: `name.split('/')[1] || name`). */
 fun String.repoShortName(): String = substringAfter('/', this)
+
+/**
+ * Pull-to-refresh for a list screen. The layout wraps the list together with its loading/empty overlay,
+ * so "can the content still scroll up" has to be asked of [list] itself.
+ */
+fun SwipeRefreshLayout.setup(list: RecyclerView, onRefresh: () -> Unit) {
+    setColorSchemeColors(context.color(R.color.accent))
+    setProgressBackgroundColorSchemeColor(context.color(R.color.surface))
+    setOnChildScrollUpCallback { _, _ -> list.canScrollVertically(-1) }
+    setOnRefreshListener { onRefresh() }
+}

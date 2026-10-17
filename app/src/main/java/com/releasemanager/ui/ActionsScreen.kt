@@ -19,6 +19,7 @@ import androidx.appcompat.widget.SwitchCompat
 import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.google.android.material.button.MaterialButton
 import com.releasemanager.R
 import com.releasemanager.data.GitHubApiException
@@ -51,6 +52,7 @@ class ActionsScreen(private val ctx: AppContext) {
     private val root: View = act.findViewById(R.id.screenActions)
     private val list: RecyclerView = root.findViewById(R.id.listRuns)
     private val stateView = StateView(root)
+    private val swipe: SwipeRefreshLayout = root.findViewById(R.id.swipeRuns)
     private val btnWorkflow: View = root.findViewById(R.id.btnWorkflow)
     private val textWorkflow: TextView = root.findViewById(R.id.textWorkflow)
     private val btnRun: MaterialButton = root.findViewById(R.id.btnRunWorkflow)
@@ -68,6 +70,7 @@ class ActionsScreen(private val ctx: AppContext) {
     init {
         list.layoutManager = LinearLayoutManager(act)
         list.adapter = adapter
+        swipe.setup(list) { load(silent = true) }
 
         root.findViewById<ImageButton>(R.id.btnBack).setOnClickListener { ctx.show(Screen.FILES) }
         root.findViewById<ImageButton>(R.id.btnRefreshRuns).setOnClickListener { load() }
@@ -86,15 +89,21 @@ class ActionsScreen(private val ctx: AppContext) {
     }
 
     /** [refreshWorkflows] false keeps the workflow list already fetched (changing the filter only needs the runs). */
-    fun load(refreshWorkflows: Boolean = true) {
+    fun load(refreshWorkflows: Boolean = true, silent: Boolean = false) {
         val api = ctx.api ?: return
         val repo = state.currentRepo ?: return
         loadedRepo = repo
-        stateView.showLoading()
-        adapter.submitList(emptyList())
+        if (!silent) {
+            swipe.isRefreshing = false
+            stateView.showLoading()
+            adapter.submitList(emptyList())
+        }
         loadJob?.cancel()
         runJob?.cancel()
-        loadJob = ctx.launchSafe(onError = { stateView.showError(it.userMessage()) { load() } }) {
+        loadJob = ctx.launchSafe(onError = {
+            swipe.isRefreshing = false
+            if (silent) ctx.toast.error(it.userMessage()) else stateView.showError(it.userMessage()) { load() }
+        }) {
             if (refreshWorkflows || workflows.isEmpty()) loadWorkflows(api, repo)
             val filter = selected
             val runs = api.listWorkflowRuns(repo, workflowId = filter?.id)
@@ -109,6 +118,7 @@ class ActionsScreen(private val ctx: AppContext) {
             } else {
                 stateView.hide()
             }
+            swipe.isRefreshing = false
         }
     }
 

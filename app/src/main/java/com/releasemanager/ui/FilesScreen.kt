@@ -379,6 +379,11 @@ class FilesScreen(private val ctx: AppContext) {
 
     // ── File action sheet ────────────────────────────────────────────────────
 
+    private fun openImage(file: FileEntry) {
+        val repo = state.currentRepo ?: return
+        ImageViewerActivity.openRepoFile(act, repo, file.path, state.currentBranch, file.name, file.size)
+    }
+
     private fun openFileAction(file: FileEntry) {
         val items = mutableListOf<Dialogs.SheetItem>()
         // Staged-only files (sha == null) are not on GitHub yet: nothing to open, download or rename
@@ -387,15 +392,22 @@ class FilesScreen(private val ctx: AppContext) {
             // Text files open straight into the in-app editor (no download needed); anything else
             // still falls back to saving a copy, since there is nothing in-app to view it with.
             val editable = isTextFile(file.name)
-            items.add(
-                Dialogs.SheetItem(
-                    "Open", if (editable) R.drawable.ic_edit_square else R.drawable.ic_external,
-                    onClick = {
-                        if (editable) ctx.editor.open(EditingFile(file.path, file.sha, file.name))
-                        else saveCopy(file)
-                    }
+            val image = ImageTypes.isImage(file.name)
+            // Pictures are shown in the app straight from GitHub: nothing is saved on the device
+            if (image) {
+                items.add(Dialogs.SheetItem("View", R.drawable.ic_eye, onClick = { openImage(file) }))
+            }
+            if (editable || !image) {
+                items.add(
+                    Dialogs.SheetItem(
+                        "Open", if (editable) R.drawable.ic_edit_square else R.drawable.ic_external,
+                        onClick = {
+                            if (editable) ctx.editor.open(EditingFile(file.path, file.sha, file.name))
+                            else saveCopy(file)
+                        }
+                    )
                 )
-            )
+            }
         }
         if (!file.isDir && onGitHub) {
             items.add(Dialogs.SheetItem("Download", R.drawable.ic_download, onClick = { saveCopy(file) }))

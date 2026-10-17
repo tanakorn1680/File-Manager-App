@@ -828,6 +828,24 @@ class GitHubApi(private val token: String) {
     }
 
     /**
+     * Streams a release file into [sink] (does not close it). Works for private repositories too: the API
+     * answers with a redirect to signed storage, which carries its own authorisation.
+     */
+    suspend fun downloadReleaseAsset(
+        repo: String,
+        assetId: Long,
+        sink: OutputStream,
+        onProgress: ((done: Long, total: Long) -> Unit)? = null
+    ) {
+        withContext(Dispatchers.IO) {
+            val req = authedRequest("https://api.github.com/repos/$repo/releases/assets/$assetId")
+                .header("Accept", "application/octet-stream")
+                .get().build()
+            streamViaRedirect(req, sink, onProgress)
+        }
+    }
+
+    /**
      * Streams the whole repository at [ref] as a ZIP into [sink] (does not close it). GitHub answers with a
      * redirect to its archive host; OkHttp follows it. The size is usually unknown, so progress reports bytes only.
      */

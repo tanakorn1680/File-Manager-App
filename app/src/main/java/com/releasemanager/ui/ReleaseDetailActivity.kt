@@ -411,6 +411,11 @@ class ReleaseDetailActivity : AppCompatActivity() {
 
     /** Web: the asset name is a link to its download URL. */
     private fun openAsset(asset: ReleaseAsset) {
+        // Pictures are shown in the app (kept in memory, nothing is saved); everything else goes to the browser
+        if (ImageTypes.isImage(asset.name)) {
+            ImageViewerActivity.openReleaseAsset(this, repo, asset.id, asset.name, asset.size)
+            return
+        }
         try {
             startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(asset.browserDownloadUrl)))
         } catch (e: ActivityNotFoundException) {

@@ -435,5 +435,12 @@ internal val TH_STRINGS: Map<String, String> = mapOf(
     "released this" to "เผยแพร่เมื่อ",
     "drafted this" to "สร้างร่างเมื่อ",
     "to" to "ไปยัง",
-    "since this release" to "นับจาก release นี้"
+    "since this release" to "นับจาก release นี้",
+
+    // ── Image viewer ──
+    "View" to "ดูรูป",
+    "Loading image…" to "กำลังโหลดรูป…",
+    "This image is too large to preview. Use Download instead." to "รูปนี้ใหญ่เกินกว่าจะดูตัวอย่าง ใช้ Download แทน",
+    "This picture format cannot be shown on this Android version." to "Android เวอร์ชันนี้แสดงรูปแบบรูปภาพนี้ไม่ได้",
+    "Could not open the image" to "เปิดรูปไม่สำเร็จ"
 )

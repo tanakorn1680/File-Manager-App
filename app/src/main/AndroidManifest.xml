@@ -39,6 +39,12 @@
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />
 
+        <!-- Shows an image straight from GitHub (kept in memory only); no recreate on rotation so it is not fetched twice -->
+        <activity
+            android:name=".ui.ImageViewerActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode"
+            android:exported="false" />
+
         <!-- Runs every upload/download in the background and shows its progress in the notification shade -->
         <service
             android:name=".service.TransferService"

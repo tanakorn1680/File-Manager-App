@@ -15,6 +15,16 @@ data class Release(
     val assets: List<ReleaseAsset>
 )
 
+/** What the release page shows beyond the list payload: who published it, when, and where its tag sits. */
+data class ReleaseInfo(
+    val author: String?,
+    val date: String,            // published_at (created_at for a draft)
+    val branch: String?,         // target branch, null when the release targets a plain commit
+    val isLatest: Boolean,
+    val commitSha: String?,      // commit the tag points at
+    val aheadBy: Int             // commits on [branch] since the tag
+)
+
 data class ReleaseAsset(
     val id: Long,
     val name: String,

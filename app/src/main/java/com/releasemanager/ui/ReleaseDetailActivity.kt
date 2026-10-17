@@ -8,6 +8,9 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.OpenableColumns
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
 import android.view.View
 import android.webkit.MimeTypeMap
 import android.widget.ProgressBar
@@ -22,6 +25,7 @@ import com.google.android.material.button.MaterialButton
 import com.releasemanager.R
 import com.releasemanager.data.GitHubApiException
 import com.releasemanager.data.ReleaseAsset
+import com.releasemanager.data.ReleaseInfo
 import com.releasemanager.data.TokenStore
 import com.releasemanager.network.GitHubApi
 import com.releasemanager.network.UploadJobs
@@ -31,6 +35,7 @@ import com.releasemanager.service.TransferKind
 import com.releasemanager.service.TransferManager
 import com.releasemanager.service.TransferState
 import com.releasemanager.util.formatSize
+import com.releasemanager.util.formatTimeAgo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -49,6 +54,10 @@ class ReleaseDetailActivity : AppCompatActivity() {
     private lateinit var btnCancelUpload: MaterialButton
     private lateinit var recyclerAssets: RecyclerView
     private lateinit var textEmptyAssets: TextView
+    private lateinit var textAssetCount: TextView
+    private lateinit var imgAssetsChevron: View
+    private var assetsExpanded = true
+    private var assetsLoaded = false
     private lateinit var btnDeleteRelease: View
     private lateinit var appToast: AppToast
 
@@ -111,7 +120,10 @@ class ReleaseDetailActivity : AppCompatActivity() {
         btnCancelUpload = findViewById(R.id.btnCancelUpload)
         recyclerAssets = findViewById(R.id.recyclerAssets)
         textEmptyAssets = findViewById(R.id.textEmptyAssets)
+        textAssetCount = findViewById(R.id.textAssetCount)
+        imgAssetsChevron = findViewById(R.id.imgAssetsChevron)
         btnDeleteRelease = findViewById(R.id.btnDeleteRelease)
+        findViewById<View>(R.id.assetsHeader).setOnClickListener { toggleAssets() }
 
         assetAdapter = AssetAdapter(
             onOpen = { asset -> openAsset(asset) },
@@ -125,6 +137,11 @@ class ReleaseDetailActivity : AppCompatActivity() {
         btnDeleteRelease.setOnClickListener { confirmDeleteRelease() }
 
         loadAssets()
+        loadInfo(
+            tagName,
+            draft = intent.getBooleanExtra(EXTRA_DRAFT, false),
+            prerelease = intent.getBooleanExtra(EXTRA_PRERELEASE, false)
+        )
 
         // Back on a release whose upload is still running in the background: show its progress again
         TransferManager.addListener(transferListener)
@@ -147,14 +164,74 @@ class ReleaseDetailActivity : AppCompatActivity() {
     private fun loadAssets() {
         lifecycleScope.launch {
             try {
-                val releases = api.listReleases(repo)
-                val release = releases.firstOrNull { it.id == releaseId }
-                val assets = release?.assets ?: emptyList()
-                assetAdapter.submitList(assets)
-                textEmptyAssets.visibility = if (assets.isEmpty()) View.VISIBLE else View.GONE
+                assetAdapter.submitList(api.listReleaseAssets(repo, releaseId))
+                assetsLoaded = true
+                updateAssets()
             } catch (e: Exception) {
                 appToast.error("Could not load assets: ${e.message}")
             }
+        }
+    }
+
+    /** The count, the list and the "No files" text follow the loaded files and the collapsed/expanded header. */
+    private fun updateAssets() {
+        if (assetsLoaded) {
+            textAssetCount.text = assetAdapter.count().toString()
+            textAssetCount.visibility = View.VISIBLE
+        }
+        recyclerAssets.visibility = if (assetsExpanded) View.VISIBLE else View.GONE
+        textEmptyAssets.visibility =
+            if (assetsLoaded && assetsExpanded && assetAdapter.isEmpty()) View.VISIBLE else View.GONE
+    }
+
+    private fun toggleAssets() {
+        assetsExpanded = !assetsExpanded
+        imgAssetsChevron.rotation = if (assetsExpanded) 0f else -90f
+        updateAssets()
+    }
+
+    // ── Who published it, the tag's commit, commits since ─────────────────
+
+    private fun loadInfo(tagName: String, draft: Boolean, prerelease: Boolean) {
+        lifecycleScope.launch {
+            try {
+                bindInfo(api.getReleaseInfo(repo, releaseId, tagName), draft, prerelease)
+            } catch (e: Exception) {
+                // The header keeps what the release list already provided
+            }
+        }
+    }
+
+    private fun bindInfo(info: ReleaseInfo, draft: Boolean, prerelease: Boolean) {
+        findViewById<View>(R.id.textLatest).visibility =
+            if (info.isLatest && !draft && !prerelease) View.VISIBLE else View.GONE
+
+        val author = info.author
+        if (!author.isNullOrBlank()) {
+            val initial = findViewById<TextView>(R.id.textAuthorInitial)
+            initial.text = author.take(1).uppercase()
+            initial.background = ovalDrawable(color(R.color.accent_light))
+            findViewById<TextView>(R.id.textReleased).text = listOf(
+                author,
+                I18n.tr(if (draft) "drafted this" else "released this"),
+                formatTimeAgo(info.date)
+            ).filter { it.isNotEmpty() }.joinToString(" ")
+            findViewById<View>(R.id.rowAuthor).visibility = View.VISIBLE
+        }
+
+        val branch = info.branch
+        if (branch != null && info.aheadBy > 0) {
+            val count = "${info.aheadBy} ${if (info.aheadBy == 1) "commit" else "commits"}"
+            val text = SpannableString("$count ${I18n.tr("to")} $branch ${I18n.tr("since this release")}")
+            text.setSpan(ForegroundColorSpan(color(R.color.accent)), 0, count.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            val since = findViewById<TextView>(R.id.textSince)
+            since.text = text
+            since.visibility = View.VISIBLE
+        }
+
+        info.commitSha?.takeIf { it.isNotBlank() }?.let { sha ->
+            findViewById<TextView>(R.id.textCommit).text = sha.take(7)
+            findViewById<View>(R.id.groupCommit).visibility = View.VISIBLE
         }
     }
 
@@ -231,7 +308,7 @@ class ReleaseDetailActivity : AppCompatActivity() {
             TransferState.SUCCESS -> {
                 (t.result as? ReleaseAsset)?.let { asset ->
                     assetAdapter.addItem(asset)
-                    textEmptyAssets.visibility = View.GONE
+                    updateAssets()
                 }
                 appToast.success("Uploaded")
             }
@@ -296,7 +373,7 @@ class ReleaseDetailActivity : AppCompatActivity() {
             try {
                 api.deleteAsset(repo, asset.id)
                 assetAdapter.removeAt(position)
-                if (assetAdapter.isEmpty()) textEmptyAssets.visibility = View.VISIBLE
+                updateAssets()
                 appToast.success("Deleted")
             } catch (e: Exception) {
                 appToast.error("Could not delete: ${e.message}")

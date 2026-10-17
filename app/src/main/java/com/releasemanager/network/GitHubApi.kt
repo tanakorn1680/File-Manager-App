@@ -1,5 +1,6 @@
 package com.releasemanager.network
 
+import android.net.Uri
 import android.util.Base64
 import com.releasemanager.data.DeleteTarget
 import com.releasemanager.data.FileContent
@@ -15,6 +16,7 @@ import com.releasemanager.data.RepoLanguage
 import com.releasemanager.data.JobLog
 import com.releasemanager.data.Release
 import com.releasemanager.data.ReleaseAsset
+import com.releasemanager.data.ReleaseInfo
 import com.releasemanager.data.RepoRef
 import com.releasemanager.data.RunArtifact
 import com.releasemanager.data.UploadItem
@@ -996,6 +998,72 @@ class GitHubApi(private val token: String) {
         val req = authedRequest("https://api.github.com/repos/$repo/releases?per_page=50").get().build()
         val arr = executeArray(req)
         return (0 until arr.length()).map { i -> parseRelease(arr.getJSONObject(i)) }
+    }
+
+    /** Every file of a release (the release payload itself can hold fewer than the release has). */
+    suspend fun listReleaseAssets(repo: String, releaseId: Long): List<ReleaseAsset> {
+        val out = mutableListOf<ReleaseAsset>()
+        for (page in 1..10) {
+            val arr = executeArray(
+                authedRequest("https://api.github.com/repos/$repo/releases/$releaseId/assets?per_page=100&page=$page").get().build()
+            )
+            for (i in 0 until arr.length()) {
+                val a = arr.getJSONObject(i)
+                out.add(
+                    ReleaseAsset(
+                        id = a.getLong("id"),
+                        name = a.getString("name"),
+                        size = a.getLong("size"),
+                        downloadCount = a.optInt("download_count", 0),
+                        browserDownloadUrl = a.getString("browser_download_url")
+                    )
+                )
+            }
+            if (arr.length() < 100) break
+        }
+        return out
+    }
+
+    /**
+     * Publisher, date, "Latest" flag, the commit of the tag and how far the branch has moved on since.
+     * Only the release itself has to load; the rest is left out when it cannot be found (e.g. a draft without a tag).
+     */
+    suspend fun getReleaseInfo(repo: String, releaseId: Long, tag: String): ReleaseInfo = coroutineScope {
+        val o = call(authedRequest("https://api.github.com/repos/$repo/releases/$releaseId").get().build()) as? JSONObject
+            ?: throw GitHubApiException("Release not found", 404)
+        val target = optStr(o, "target_commitish")
+        val branch = target?.takeIf { it.isNotBlank() && !Regex("[0-9a-f]{40}").matches(it) }
+
+        val latest = async { part { latestReleaseId(repo) } }
+        val compare = async { part { compareWithTag(repo, tag, branch ?: tag) } }
+        val latestId = latest.await().value
+        val cmp = compare.await().value
+
+        ReleaseInfo(
+            author = o.optJSONObject("author")?.let { optStr(it, "login") },
+            date = optStr(o, "published_at") ?: optStr(o, "created_at") ?: "",
+            branch = branch,
+            isLatest = latestId != null && latestId == releaseId,
+            commitSha = cmp?.first,
+            aheadBy = cmp?.second ?: 0
+        )
+    }
+
+    private suspend fun latestReleaseId(repo: String): Long? {
+        return try {
+            (call(authedRequest("https://api.github.com/repos/$repo/releases/latest").get().build()) as? JSONObject)
+                ?.optLong("id")
+        } catch (e: GitHubApiException) {
+            if (e.httpStatus == 404) null else throw e   // 404 = no published release
+        }
+    }
+
+    /** (commit the tag points at, commits [head] is ahead of the tag). */
+    private suspend fun compareWithTag(repo: String, tag: String, head: String): Pair<String?, Int>? {
+        val url = "https://api.github.com/repos/$repo/compare/${Uri.encode(tag, "/")}...${Uri.encode(head, "/")}?per_page=1"
+        val c = call(authedRequest(url).get().build()) as? JSONObject ?: return null
+        val sha = c.optJSONObject("base_commit")?.let { optStr(it, "sha") }
+        return sha to c.optInt("ahead_by", 0)
     }
 
     suspend fun createRelease(

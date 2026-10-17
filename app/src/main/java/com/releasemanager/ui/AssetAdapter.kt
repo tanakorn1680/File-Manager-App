@@ -36,6 +36,8 @@ class AssetAdapter(
 
     fun isEmpty() = items.isEmpty()
 
+    fun count() = items.size
+
     class ViewHolder(view: android.view.View) : RecyclerView.ViewHolder(view) {
         val textName: TextView = view.findViewById(R.id.textAssetName)
         val textSize: TextView = view.findViewById(R.id.textAssetSize)
@@ -52,7 +54,7 @@ class AssetAdapter(
         val asset = items[position]
         holder.textName.text = asset.name
         holder.textSize.text = formatSize(asset.size)
-        holder.textName.setOnClickListener { onOpen(asset) }
+        holder.itemView.setOnClickListener { onOpen(asset) }
         holder.btnDelete.setOnClickListener {
             onDelete(asset, holder.bindingAdapterPosition)
         }

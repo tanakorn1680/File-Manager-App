@@ -1,31 +1,42 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Web: .asset-row -->
+<!-- A release file, drawn like a file row of the repo list (item_file.xml): card, file icon, name, size -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
-    android:layout_height="wrap_content"
-    android:background="@drawable/bg_row_flat"
+    android:layout_height="56dp"
+    android:layout_marginTop="4dp"
+    android:layout_marginBottom="4dp"
+    android:background="@drawable/bg_row"
+    android:clickable="true"
+    android:focusable="true"
     android:gravity="center_vertical"
     android:orientation="horizontal"
-    android:paddingTop="10dp"
-    android:paddingBottom="11dp">
+    android:paddingStart="16dp"
+    android:paddingEnd="6dp">
+
+    <ImageView
+        android:layout_width="22dp"
+        android:layout_height="22dp"
+        android:importantForAccessibility="no"
+        android:src="@drawable/ic_file" />
 
     <TextView
         android:id="@+id/textAssetName"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
+        android:layout_marginStart="12dp"
         android:layout_weight="1"
         android:ellipsize="middle"
         android:maxLines="1"
-        android:textColor="@color/accent"
-        android:textSize="14sp"
+        android:textColor="@color/text_primary"
+        android:textSize="15sp"
         tools:text="gamedata.zip" />
 
     <TextView
         android:id="@+id/textAssetSize"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginStart="10dp"
+        android:layout_marginStart="12dp"
         android:textColor="@color/text_dim"
         android:textSize="12sp"
         tools:text="1.1 GB" />
@@ -35,7 +46,7 @@
         style="@style/App.IconButton"
         android:layout_width="40dp"
         android:layout_height="40dp"
-        android:layout_marginStart="10dp"
+        android:layout_marginStart="4dp"
         android:contentDescription="Delete asset"
         android:padding="11dp"
         android:src="@drawable/ic_trash" />

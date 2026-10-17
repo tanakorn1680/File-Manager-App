@@ -427,5 +427,13 @@ internal val TH_STRINGS: Map<String, String> = mapOf(
     "Languages" to "ภาษาโปรแกรม",
     "Updated" to "อัปเดต",
     "No releases published" to "ยังไม่มี release",
-    "Inactive" to "ไม่ใช้งาน"
+    "Inactive" to "ไม่ใช้งาน",
+
+    // ── Release page ──
+    "Latest" to "ล่าสุด",
+    "Assets" to "ไฟล์แนบ",
+    "released this" to "เผยแพร่เมื่อ",
+    "drafted this" to "สร้างร่างเมื่อ",
+    "to" to "ไปยัง",
+    "since this release" to "นับจาก release นี้"
 )

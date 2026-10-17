@@ -16,6 +16,14 @@ class AssetAdapter(
 
     private val items = mutableListOf<ReleaseAsset>()
 
+    /** The page's "Assets" header is folded: the files stay loaded, the rows are not shown. */
+    var collapsed = false
+        set(value) {
+            if (field == value) return
+            field = value
+            notifyDataSetChanged()
+        }
+
     fun submitList(newItems: List<ReleaseAsset>) {
         items.clear()
         items.addAll(newItems)
@@ -25,13 +33,13 @@ class AssetAdapter(
     fun removeAt(position: Int) {
         if (position in items.indices) {
             items.removeAt(position)
-            notifyItemRemoved(position)
+            if (!collapsed) notifyItemRemoved(position)
         }
     }
 
     fun addItem(asset: ReleaseAsset) {
         items.add(asset)
-        notifyItemInserted(items.size - 1)
+        if (!collapsed) notifyItemInserted(items.size - 1)
     }
 
     fun isEmpty() = items.isEmpty()
@@ -60,5 +68,5 @@ class AssetAdapter(
         }
     }
 
-    override fun getItemCount() = items.size
+    override fun getItemCount() = if (collapsed) 0 else items.size
 }

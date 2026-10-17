@@ -12,6 +12,7 @@ import android.text.SpannableString
 import android.text.Spanned
 import android.text.style.ForegroundColorSpan
 import android.view.View
+import android.view.ViewGroup
 import android.webkit.MimeTypeMap
 import android.widget.ProgressBar
 import android.widget.TextView
@@ -19,6 +20,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import androidx.recyclerview.widget.ConcatAdapter
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.button.MaterialButton
@@ -46,6 +48,8 @@ class ReleaseDetailActivity : AppCompatActivity() {
     private lateinit var repo: String
     private var releaseId: Long = -1
 
+    /** Top of the page (title, who released it, upload zone, "Assets" header); the first row of [recyclerAssets]. */
+    private lateinit var header: View
     private lateinit var dropZone: View
     private lateinit var uploadProgressGroup: View
     private lateinit var textUploadLabel: TextView
@@ -83,7 +87,11 @@ class ReleaseDetailActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         I18n.init(this)
         setContentView(R.layout.activity_release_detail)
+        recyclerAssets = findViewById(R.id.recyclerAssets)
+        recyclerAssets.layoutManager = LinearLayoutManager(this)   // needed before the header can take its layout params
+        header = layoutInflater.inflate(R.layout.header_release_detail, recyclerAssets, false)
         I18n.translateTree(findViewById(android.R.id.content))
+        I18n.translateTree(header)
 
         repo = intent.getStringExtra(EXTRA_REPO) ?: run { finish(); return }
         releaseId = intent.getLongExtra(EXTRA_RELEASE_ID, -1)
@@ -100,37 +108,35 @@ class ReleaseDetailActivity : AppCompatActivity() {
         findViewById<TextView>(R.id.textTitle).text = tagName
         findViewById<View>(R.id.btnBack).setOnClickListener { finish() }
 
-        findViewById<TextView>(R.id.textTag).text = tagName
-        findViewById<View>(R.id.textDraft).visibility =
+        header.findViewById<TextView>(R.id.textTag).text = tagName
+        header.findViewById<View>(R.id.textDraft).visibility =
             if (intent.getBooleanExtra(EXTRA_DRAFT, false)) View.VISIBLE else View.GONE
-        findViewById<View>(R.id.textPrerelease).visibility =
+        header.findViewById<View>(R.id.textPrerelease).visibility =
             if (intent.getBooleanExtra(EXTRA_PRERELEASE, false)) View.VISIBLE else View.GONE
-        findViewById<TextView>(R.id.textName).text = name?.ifBlank { tagName } ?: tagName
-        val textBody = findViewById<TextView>(R.id.textBody)
+        header.findViewById<TextView>(R.id.textName).text = name?.ifBlank { tagName } ?: tagName
+        val textBody = header.findViewById<TextView>(R.id.textBody)
         if (!body.isNullOrBlank()) {
             textBody.text = body
             textBody.visibility = View.VISIBLE
         }
 
-        dropZone = findViewById(R.id.dropZone)
-        uploadProgressGroup = findViewById(R.id.uploadProgressGroup)
-        textUploadLabel = findViewById(R.id.textUploadLabel)
-        progressUpload = findViewById(R.id.progressUpload)
+        dropZone = header.findViewById(R.id.dropZone)
+        uploadProgressGroup = header.findViewById(R.id.uploadProgressGroup)
+        textUploadLabel = header.findViewById(R.id.textUploadLabel)
+        progressUpload = header.findViewById(R.id.progressUpload)
         smoothUpload = SmoothProgress(progressUpload)
-        btnCancelUpload = findViewById(R.id.btnCancelUpload)
-        recyclerAssets = findViewById(R.id.recyclerAssets)
-        textEmptyAssets = findViewById(R.id.textEmptyAssets)
-        textAssetCount = findViewById(R.id.textAssetCount)
-        imgAssetsChevron = findViewById(R.id.imgAssetsChevron)
+        btnCancelUpload = header.findViewById(R.id.btnCancelUpload)
+        textEmptyAssets = header.findViewById(R.id.textEmptyAssets)
+        textAssetCount = header.findViewById(R.id.textAssetCount)
+        imgAssetsChevron = header.findViewById(R.id.imgAssetsChevron)
         btnDeleteRelease = findViewById(R.id.btnDeleteRelease)
-        findViewById<View>(R.id.assetsHeader).setOnClickListener { toggleAssets() }
+        header.findViewById<View>(R.id.assetsHeader).setOnClickListener { toggleAssets() }
 
         assetAdapter = AssetAdapter(
             onOpen = { asset -> openAsset(asset) },
             onDelete = { asset, position -> confirmDeleteAsset(asset, position) }
         )
-        recyclerAssets.layoutManager = LinearLayoutManager(this)
-        recyclerAssets.adapter = assetAdapter
+        recyclerAssets.adapter = ConcatAdapter(HeaderAdapter(header), assetAdapter)
 
         dropZone.setOnClickListener { pickFileLauncher.launch(arrayOf("*/*")) }
         btnCancelUpload.setOnClickListener { cancelUpload() }
@@ -179,7 +185,6 @@ class ReleaseDetailActivity : AppCompatActivity() {
             textAssetCount.text = assetAdapter.count().toString()
             textAssetCount.visibility = View.VISIBLE
         }
-        recyclerAssets.visibility = if (assetsExpanded) View.VISIBLE else View.GONE
         textEmptyAssets.visibility =
             if (assetsLoaded && assetsExpanded && assetAdapter.isEmpty()) View.VISIBLE else View.GONE
     }
@@ -187,6 +192,7 @@ class ReleaseDetailActivity : AppCompatActivity() {
     private fun toggleAssets() {
         assetsExpanded = !assetsExpanded
         imgAssetsChevron.rotation = if (assetsExpanded) 0f else -90f
+        assetAdapter.collapsed = !assetsExpanded
         updateAssets()
     }
 
@@ -203,20 +209,20 @@ class ReleaseDetailActivity : AppCompatActivity() {
     }
 
     private fun bindInfo(info: ReleaseInfo, draft: Boolean, prerelease: Boolean) {
-        findViewById<View>(R.id.textLatest).visibility =
+        header.findViewById<View>(R.id.textLatest).visibility =
             if (info.isLatest && !draft && !prerelease) View.VISIBLE else View.GONE
 
         val author = info.author
         if (!author.isNullOrBlank()) {
-            val initial = findViewById<TextView>(R.id.textAuthorInitial)
+            val initial = header.findViewById<TextView>(R.id.textAuthorInitial)
             initial.text = author.take(1).uppercase()
             initial.background = ovalDrawable(color(R.color.accent_light))
-            findViewById<TextView>(R.id.textReleased).text = listOf(
+            header.findViewById<TextView>(R.id.textReleased).text = listOf(
                 author,
                 I18n.tr(if (draft) "drafted this" else "released this"),
                 formatTimeAgo(info.date)
             ).filter { it.isNotEmpty() }.joinToString(" ")
-            findViewById<View>(R.id.rowAuthor).visibility = View.VISIBLE
+            header.findViewById<View>(R.id.rowAuthor).visibility = View.VISIBLE
         }
 
         val branch = info.branch
@@ -224,14 +230,14 @@ class ReleaseDetailActivity : AppCompatActivity() {
             val count = "${info.aheadBy} ${if (info.aheadBy == 1) "commit" else "commits"}"
             val text = SpannableString("$count ${I18n.tr("to")} $branch ${I18n.tr("since this release")}")
             text.setSpan(ForegroundColorSpan(color(R.color.accent)), 0, count.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-            val since = findViewById<TextView>(R.id.textSince)
+            val since = header.findViewById<TextView>(R.id.textSince)
             since.text = text
             since.visibility = View.VISIBLE
         }
 
         info.commitSha?.takeIf { it.isNotBlank() }?.let { sha ->
-            findViewById<TextView>(R.id.textCommit).text = sha.take(7)
-            findViewById<View>(R.id.groupCommit).visibility = View.VISIBLE
+            header.findViewById<TextView>(R.id.textCommit).text = sha.take(7)
+            header.findViewById<View>(R.id.groupCommit).visibility = View.VISIBLE
         }
     }
 
@@ -410,6 +416,16 @@ class ReleaseDetailActivity : AppCompatActivity() {
         } catch (e: ActivityNotFoundException) {
             appToast.error("No app can open this link")
         }
+    }
+
+    /** Shows the already inflated [header] as the first row of the page. */
+    private class HeaderAdapter(private val header: View) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder =
+            object : RecyclerView.ViewHolder(header) {}
+
+        override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {}
+
+        override fun getItemCount() = 1
     }
 
     companion object {

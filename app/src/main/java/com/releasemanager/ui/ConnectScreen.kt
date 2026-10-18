@@ -63,7 +63,11 @@ class ConnectScreen(private val ctx: AppContext) {
         val client = GitHubApi(token)
         // A commit pushed by this app that triggers GitHub Actions gets a "build succeeded / failed" notification
         client.onCommitted = { repo, sha -> RunWatcher.afterCommit(ctx.activity, client, repo, sha) }
-        ctx.launchSafe(onError = { showStatus("Connection failed: ${it.userMessage()}", isError = true) }) {
+        ctx.launchSafe(onError = {
+            showStatus("Connection failed: ${it.userMessage()}", isError = true)
+            // The launch splash gives way to the form so the token can be fixed or the connection retried
+            if (ctx.activity.current == Screen.SPLASH) ctx.show(Screen.CONNECT)
+        }) {
             try {
                 val user = client.verifyTokenAndGetUser()
                 ctx.api = client

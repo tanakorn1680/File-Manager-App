@@ -9,6 +9,7 @@ import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.EditText
 import android.widget.TextView
+import androidx.core.widget.doAfterTextChanged
 import com.google.android.material.button.MaterialButton
 import com.releasemanager.R
 import com.releasemanager.data.EditMode
@@ -68,6 +69,10 @@ class UploadScreen(private val ctx: AppContext) {
     private var summaryMode = false
     private var uploading = false
 
+    /** The commit message was typed by the user: picking other files no longer replaces it. */
+    private var messageEdited = false
+    private var settingMessage = false
+
     /** The background upload this screen is showing (Quick Edit only), null when none. */
     private var transfer: Transfer? = null
 
@@ -75,6 +80,22 @@ class UploadScreen(private val ctx: AppContext) {
         root.findViewById<ImageButton>(R.id.btnBack).setOnClickListener { ctx.show(Screen.FILES) }
         dropZone.setOnClickListener { pick() }
         btnDoUpload.setOnClickListener { startUpload() }
+        inputCommitMsg.doAfterTextChanged { if (!settingMessage) messageEdited = true }
+    }
+
+    /** Sets the commit message from code (not counted as the user editing it). */
+    private fun setMessage(text: String) {
+        settingMessage = true
+        inputCommitMsg.setText(text)
+        settingMessage = false
+    }
+
+    /** "Upload ZIP my-archive", "Upload photo.jpg", "Upload a.txt, b.txt, c.txt and 4 more". */
+    private fun defaultMessage(files: List<Picked>): String {
+        if (mode == Mode.ZIP) return "Upload ZIP ${files.first().name.dropLast(".zip".length)}"
+        val names = files.map { it.name }
+        val shown = names.take(MESSAGE_NAMES).joinToString(", ")
+        return if (names.size <= MESSAGE_NAMES) "Upload $shown" else "Upload $shown and ${names.size - MESSAGE_NAMES} more"
     }
 
     /** Web: openUploadScreen(mode). */
@@ -101,7 +122,8 @@ class UploadScreen(private val ctx: AppContext) {
         smooth1.reset()
         smooth2.reset()
         btnDoUpload.text = I18n.tr(if (zip) "Upload & Extract" else "Upload")
-        inputCommitMsg.setText(if (zip) "Upload ZIP contents" else "Upload files")
+        messageEdited = false
+        setMessage(if (zip) "Upload ZIP contents" else "Upload files")
 
         ctx.show(Screen.UPLOAD)
     }
@@ -132,6 +154,7 @@ class UploadScreen(private val ctx: AppContext) {
             } else {
                 picked = described
             }
+            if (!messageEdited) setMessage(defaultMessage(picked))
             renderUploadList(picked)
         }
     }
@@ -483,5 +506,8 @@ class UploadScreen(private val ctx: AppContext) {
         const val UPLOAD_LIST_ROW_CAP = 300
 
         const val AFTER_UPLOAD_DELAY_MS = 1200L
+
+        /** How many file names the suggested commit message lists before it says "and N more". */
+        const val MESSAGE_NAMES = 3
     }
 }

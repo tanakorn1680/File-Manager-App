@@ -5,6 +5,7 @@
     android:layout_height="match_parent"
     android:background="@color/bg">
 
+    <include layout="@layout/screen_splash" />
     <include layout="@layout/screen_connect" />
     <include layout="@layout/screen_repos" />
     <include layout="@layout/screen_files" />

@@ -17,7 +17,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 /** The web's `.screen` sections; MainActivity shows exactly one at a time (web: showScreen()). */
-enum class Screen { CONNECT, REPOS, FILES, EDITOR, UPLOAD, RELEASES, RELEASE_NEW, ACTIONS, HISTORY }
+/** SPLASH: shown while a saved token connects, so the token form never flashes by. */
+enum class Screen { SPLASH, CONNECT, REPOS, FILES, EDITOR, UPLOAD, RELEASES, RELEASE_NEW, ACTIONS, HISTORY }
 
 /**
  * Everything the screen controllers share: the web's `state` object, the API client, the toast,

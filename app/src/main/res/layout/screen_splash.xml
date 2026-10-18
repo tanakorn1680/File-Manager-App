@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Shown at launch while a saved token connects: just the logo on the app background -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/screenSplash"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg">
+
+    <com.google.android.material.imageview.ShapeableImageView
+        android:layout_width="96dp"
+        android:layout_height="96dp"
+        android:layout_gravity="center"
+        android:contentDescription="@string/app_name"
+        android:elevation="4dp"
+        android:scaleType="centerCrop"
+        android:src="@drawable/logo_app"
+        app:shapeAppearanceOverlay="@style/ShapeAppearanceOverlay.App.Logo" />
+</FrameLayout>

@@ -150,6 +150,7 @@ class MainActivity : AppCompatActivity() {
             toast = AppToast(findViewById<TextView>(R.id.toastView))
         )
 
+        roots[Screen.SPLASH] = findViewById(R.id.screenSplash)
         roots[Screen.CONNECT] = findViewById(R.id.screenConnect)
         roots[Screen.REPOS] = findViewById(R.id.screenRepos)
         roots[Screen.FILES] = findViewById(R.id.screenFiles)
@@ -170,7 +171,10 @@ class MainActivity : AppCompatActivity() {
         ctx.actions = ActionsScreen(ctx)
         ctx.history = HistoryScreen(ctx)
 
-        showScreen(Screen.CONNECT)
+        // With a saved token the app connects at once, so start on the plain splash; the token form
+        // appears only when there is no token or the connection fails (ConnectScreen reveals it then)
+        val hasSavedToken = !ctx.tokenStore.getToken().isNullOrBlank()
+        showScreen(if (hasSavedToken) Screen.SPLASH else Screen.CONNECT)
         ctx.attachTransfers()
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -222,7 +226,7 @@ class MainActivity : AppCompatActivity() {
     /** System Back = the on-screen back arrow of the visible screen. */
     private fun handleBack() {
         when (current) {
-            Screen.CONNECT, Screen.REPOS -> finish()
+            Screen.SPLASH, Screen.CONNECT, Screen.REPOS -> finish()
             Screen.FILES -> ctx.files.onBack()
             Screen.EDITOR -> ctx.editor.onBack()
             Screen.UPLOAD -> showScreen(Screen.FILES)

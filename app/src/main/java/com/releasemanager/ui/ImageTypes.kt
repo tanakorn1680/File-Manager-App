@@ -25,4 +25,7 @@ object ImageTypes {
     fun webMime(name: String): String? = WEB[ext(name)]
 
     fun needsDecoder(name: String): Boolean = ext(name) in DECODER
+
+    /** Pictures a list row can preview (Android decodes bitmaps itself; a vector drawing it cannot). */
+    fun canThumbnail(name: String): Boolean = isImage(name) && ext(name) != "svg"
 }

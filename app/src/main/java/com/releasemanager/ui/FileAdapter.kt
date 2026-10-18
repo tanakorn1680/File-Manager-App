@@ -9,6 +9,8 @@ import androidx.recyclerview.widget.RecyclerView
 import com.releasemanager.R
 import com.releasemanager.data.FileEntry
 import com.releasemanager.util.formatSize
+import kotlinx.coroutines.Job
+import java.io.OutputStream
 
 /**
  * Web: renderFiles() — one `.file-item` per entry. [selected] and [staged] are the live sets
@@ -18,7 +20,10 @@ class FileAdapter(
     private val selected: Set<String>,
     private val staged: Set<String>,
     private val onClick: (FileEntry) -> Unit,
-    private val onLongClick: (FileEntry) -> Unit
+    private val onLongClick: (FileEntry) -> Unit,
+    /** Gives picture rows a small preview in place of the icon; [thumbSource] says how to fetch a file's bytes. */
+    private val thumbnails: Thumbnails? = null,
+    private val thumbSource: ((FileEntry) -> (suspend (OutputStream) -> Unit)?)? = null
 ) : RecyclerView.Adapter<FileAdapter.ViewHolder>() {
 
     private val items = mutableListOf<FileEntry>()
@@ -44,6 +49,7 @@ class FileAdapter(
         val textSize: TextView = view.findViewById(R.id.textFileSize)
         val checkCircle: View = view.findViewById(R.id.checkCircle)
         val imgCheck: ImageView = view.findViewById(R.id.imgCheck)
+        var thumbJob: Job? = null
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
@@ -55,7 +61,19 @@ class FileAdapter(
         val file = items[position]
         val isSelected = file.path in selected
 
-        holder.imgIcon.setImageResource(if (file.isDir) R.drawable.ic_folder else R.drawable.ic_file)
+        holder.thumbJob?.cancel()
+        holder.thumbJob = null
+        Thumbnails.showIcon(holder.imgIcon, if (file.isDir) R.drawable.ic_folder else R.drawable.ic_file)
+        if (thumbnails != null && thumbSource != null && !file.isDir && !file.sha.isNullOrEmpty() &&
+            ImageTypes.canThumbnail(file.name)
+        ) {
+            val fetch = thumbSource.invoke(file)
+            if (fetch != null) {
+                holder.thumbJob = thumbnails.bind("blob:${file.sha}", file.size, fetch) {
+                    Thumbnails.showThumbnail(holder.imgIcon, it)
+                }
+            }
+        }
         holder.textName.text = file.name
         val isStaged = file.path in staged
         holder.stageDot.visibility = if (isStaged) View.VISIBLE else View.GONE
@@ -78,6 +96,11 @@ class FileAdapter(
 
         holder.itemView.setOnClickListener { onClick(file) }
         holder.itemView.setOnLongClickListener { onLongClick(file); true }
+    }
+
+    override fun onViewRecycled(holder: ViewHolder) {
+        holder.thumbJob?.cancel()
+        holder.thumbJob = null
     }
 
     override fun getItemCount() = items.size

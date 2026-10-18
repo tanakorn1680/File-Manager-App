@@ -38,6 +38,7 @@ import com.releasemanager.service.TransferManager
 import com.releasemanager.service.TransferState
 import com.releasemanager.util.formatSize
 import com.releasemanager.util.formatTimeAgo
+import java.io.OutputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -134,7 +135,12 @@ class ReleaseDetailActivity : AppCompatActivity() {
 
         assetAdapter = AssetAdapter(
             onOpen = { asset -> openAsset(asset) },
-            onDelete = { asset, position -> confirmDeleteAsset(asset, position) }
+            onDelete = { asset, position -> confirmDeleteAsset(asset, position) },
+            thumbnails = Thumbnails(lifecycleScope),
+            thumbSource = { asset ->
+                val fetch: suspend (OutputStream) -> Unit = { sink -> api.downloadReleaseAsset(repo, asset.id, sink) }
+                fetch
+            }
         )
         recyclerAssets.adapter = ConcatAdapter(HeaderAdapter(header), assetAdapter)
 

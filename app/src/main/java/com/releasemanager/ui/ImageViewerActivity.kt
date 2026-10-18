@@ -87,12 +87,17 @@ class ImageViewerActivity : AppCompatActivity() {
             loadWithOverviewMode = true
         }
         webView.webViewClient = object : WebViewClient() {
-            // The only thing the page may load is the picture held in memory; everything else is refused
+            // The picture comes from memory; any other web address the page might ask for is refused.
+            // The page itself (the main frame, and the data: address it is loaded from) is left to the web view.
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
-                return if (request.url.toString() == IMAGE_URL) {
-                    WebResourceResponse(imageMime, null, 200, "OK", emptyMap(), ByteArrayInputStream(imageBytes, 0, imageLength))
-                } else {
-                    WebResourceResponse("text/plain", "utf-8", 404, "Not Found", emptyMap(), ByteArrayInputStream(ByteArray(0)))
+                val url = request.url
+                return when {
+                    request.isForMainFrame -> null
+                    url.toString() == IMAGE_URL ->
+                        WebResourceResponse(imageMime, null, 200, "OK", emptyMap(), ByteArrayInputStream(imageBytes, 0, imageLength))
+                    url.scheme == "http" || url.scheme == "https" ->
+                        WebResourceResponse("text/plain", "utf-8", 404, "Not Found", emptyMap(), ByteArrayInputStream(ByteArray(0)))
+                    else -> null
                 }
             }
         }
@@ -203,26 +208,6 @@ class ImageViewerActivity : AppCompatActivity() {
     }
 
     private class UnsupportedFormat : IOException()
-
-    /** Collects the download in memory, without the extra copy [ByteArrayOutputStream.toByteArray] makes; refuses to grow past [limit]. */
-    private class MemorySink(initial: Int, private val limit: Int) : ByteArrayOutputStream(initial) {
-        class TooLarge : IOException("too large")
-
-        @Synchronized
-        override fun write(b: Int) {
-            if (count + 1 > limit) throw TooLarge()
-            super.write(b)
-        }
-
-        @Synchronized
-        override fun write(b: ByteArray, off: Int, len: Int) {
-            if (count + len > limit) throw TooLarge()
-            super.write(b, off, len)
-        }
-
-        fun bytes(): ByteArray = buf
-        fun length(): Int = count
-    }
 
     companion object {
         private const val EXTRA_KIND = "kind"

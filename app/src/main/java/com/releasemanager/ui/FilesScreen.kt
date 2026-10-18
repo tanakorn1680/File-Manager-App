@@ -21,6 +21,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.widget.ListPopupWindow
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
@@ -47,6 +48,7 @@ import kotlinx.coroutines.withContext
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.IOException
+import java.io.OutputStream
 
 /** Web: #screen-files — folder browser, select mode, file actions, Stage Mode queue. */
 class FilesScreen(private val ctx: AppContext) {
@@ -67,11 +69,27 @@ class FilesScreen(private val ctx: AppContext) {
     private val textSelectCount: TextView = root.findViewById(R.id.textSelectCount)
     private val stateView = StateView(root)
 
+    /** Previews of the pictures in the list, kept in memory only. */
+    private val thumbs = Thumbnails(act.lifecycleScope)
+
     private val adapter = FileAdapter(
         selected = state.selected,
         staged = state.stagedFiles.keys,
         onClick = { onFileClick(it) },
-        onLongClick = { enterSelectMode(it) }
+        onLongClick = { enterSelectMode(it) },
+        thumbnails = thumbs,
+        thumbSource = { file ->
+            val api = ctx.api
+            val repo = state.currentRepo
+            if (api == null || repo == null) {
+                null
+            } else {
+                val fetch: suspend (OutputStream) -> Unit = { sink ->
+                    api.downloadFile(repo, file.path, state.currentBranch, sink, null, file.size)
+                }
+                fetch
+            }
+        }
     )
 
     /** What the list currently shows (remote listing + staged changes) — selection looks entries up here. */

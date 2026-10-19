@@ -123,6 +123,15 @@
                     android:max="100"
                     android:progressDrawable="@drawable/progress_bar" />
 
+                <!-- Quick Edit upload: one bar per real step (Clone, Copy, Push); rows are added by UploadScreen -->
+                <LinearLayout
+                    android:id="@+id/stepGroup"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:orientation="vertical"
+                    android:visibility="gone" />
+
                 <TextView
                     android:id="@+id/textProgressLabel2"
                     android:layout_width="match_parent"

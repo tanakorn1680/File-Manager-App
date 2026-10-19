@@ -50,6 +50,19 @@ class Transfer internal constructor(
     @Volatile var itemText: String = ""
         internal set
 
+    /**
+     * Multi-step transfers (an upload: clone, copy, push): the step being worked on (-1 = none yet), how far
+     * through it (0..1, -1 = not known) and the text shown beside it. Earlier steps are finished.
+     */
+    @Volatile var step: Int = -1
+        internal set
+
+    @Volatile var stepFraction: Float = -1f
+        internal set
+
+    @Volatile var stepStatus: String = ""
+        internal set
+
     /** Result text once finished (success message, error message, or "Cancelled"). */
     @Volatile var message: String? = null
         internal set
@@ -63,6 +76,9 @@ class Transfer internal constructor(
 
     /** Highest fraction reported so far: progress only ever moves forward. */
     internal var peak: Float = 0f
+
+    /** The same, for the step being worked on. */
+    internal var stepPeak: Float = 0f
 
     val isRunning: Boolean get() = state == TransferState.RUNNING
 }
@@ -80,6 +96,29 @@ class TransferProgress internal constructor(private val t: Transfer) {
         t.fraction = settle(fraction)
         if (label != null) t.label = label
         TransferManager.changed(t, force = false)
+    }
+
+    /**
+     * Reports a step of a multi-step transfer: [index] is the step being worked on, [fraction] how far through
+     * that step it is (-1 = not known), [status] the text for its row, and [overall] where the whole transfer
+     * sits on the single bar of the notification. Steps and their fractions only move forward.
+     */
+    fun step(index: Int, fraction: Float, status: String, overall: Float, label: String? = null) {
+        var stepChanged = false
+        synchronized(t) {
+            if (index < t.step) return
+            if (index != t.step) {
+                t.step = index
+                t.stepPeak = 0f
+                stepChanged = true
+            }
+            t.stepFraction = if (fraction < 0f) -1f else fraction.coerceIn(0f, 1f).coerceAtLeast(t.stepPeak).also { t.stepPeak = it }
+            t.stepStatus = status
+        }
+        t.fraction = settle(overall)
+        if (label != null) t.label = label
+        // A new step is always passed on at once, so a short one is not skipped by the rate limit
+        TransferManager.changed(t, force = stepChanged)
     }
 
     fun label(text: String) {

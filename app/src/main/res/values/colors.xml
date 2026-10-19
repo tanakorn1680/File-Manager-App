@@ -38,5 +38,8 @@
     <color name="danger_emphasis">#DA3633</color>
     <color name="success_emphasis_pressed">#1B6B2C</color>
     <color name="logo_bg">#1B1F23</color>
+
+    <!-- Upload steps: Clone = accent blue, Copy = this purple (GitHub's "merged" colour), Push = success green -->
+    <color name="step_copy">#A371F7</color>
     <color name="border_strong">#3D444D</color>
 </resources>

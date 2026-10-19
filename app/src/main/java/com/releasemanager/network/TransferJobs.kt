@@ -188,9 +188,42 @@ private fun gitFraction(phase: GitPhase, text: String, pct: Int): Float {
     }
 }
 
+/** The three steps of a commit-push upload; the upload screen draws one bar for each. */
+const val STEP_CLONE = 0
+const val STEP_COPY = 1
+const val STEP_PUSH = 2
+
 /**
- * Clone → copy every source in → one commit → one push. The bar follows the real work (see [gitFraction]);
- * it never moves backwards.
+ * Which step a git task belongs to and how far through that step it is, going by the one real measure the
+ * step has: the clone by the objects received, the push by the bytes written. The short tasks around them
+ * (resolving, checking out, compressing) only change the text, so a bar never moves for work that is not its own.
+ */
+private class StepReport(val step: Int, val fraction: Float, val status: String)
+
+private fun stepReport(phase: GitPhase, text: String, pct: Int): StepReport? {
+    if (pct < 0) return null
+    val p = pct.coerceIn(0, 100) / 100f
+    val t = text.lowercase()
+    return when (phase) {
+        GitPhase.CLONE -> when {
+            "receiving" in t -> StepReport(STEP_CLONE, p, "$pct%")
+            "resolving" in t -> StepReport(STEP_CLONE, 1f, "Resolving $pct%")
+            "checking out" in t -> StepReport(STEP_CLONE, 1f, "Checking out $pct%")
+            else -> null
+        }
+        GitPhase.PUSH -> when {
+            "compressing" in t -> StepReport(STEP_PUSH, 0f, "Compressing $pct%")
+            "writing" in t -> StepReport(STEP_PUSH, p, "$pct%")
+            else -> null
+        }
+        GitPhase.OTHER -> null
+    }
+}
+
+/**
+ * Clone → copy every source in → one commit → one push. Each step reports its own real progress (see
+ * [stepReport]); the notification's single bar still gets the combined estimate of [gitFraction]. Neither
+ * moves backwards.
  */
 suspend fun pushSources(
     api: GitHubApi,
@@ -202,21 +235,29 @@ suspend fun pushSources(
     progress: TransferProgress
 ) {
     val total = sources.size
-    progress.update(-1f, "Cloning $repo…")
+    progress.step(STEP_CLONE, -1f, "", 0f, "Cloning $repo…")
     val session = api.openGitSession(cacheDir, repo, branch) { phase, text, pct ->
-        val f = gitFraction(phase, text, pct)
-        if (f >= 0f) progress.update(f, text) else progress.label(text)
+        val overall = gitFraction(phase, text, pct)
+        val report = stepReport(phase, text, pct)
+        if (overall >= 0f && report != null) {
+            progress.step(report.step, report.fraction, report.status, overall, text)
+        } else if (overall >= 0f) {
+            progress.update(overall, text)
+        } else {
+            progress.label(text)
+        }
     }
     try {
         for ((i, src) in sources.withIndex()) {
             progress.item(i, "Copying ${i + 1}/$total…")
-            progress.update(0.15f + i.toFloat() / total * 0.10f, "Copying ${i + 1}/$total…")
+            progress.step(STEP_COPY, i.toFloat() / total, "${i + 1}/$total", 0.15f + i.toFloat() / total * 0.10f, "Copying ${i + 1}/$total…")
             session.addFile(src.path, src.open)
         }
-        progress.update(0.25f, "Preparing commit…")
+        progress.step(STEP_COPY, 1f, "$total/$total", 0.25f)
+        progress.step(STEP_PUSH, -1f, "", 0.25f, "Preparing commit…")
         session.commitAndPush(message)
         api.notifyCommitted(repo, session.headSha)
-        progress.update(1f, "Done")
+        progress.step(STEP_PUSH, 1f, "100%", 1f, "Done")
     } finally {
         session.close()
     }

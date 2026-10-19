@@ -1,5 +1,6 @@
 package com.releasemanager.ui
 
+import android.content.res.ColorStateList
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.view.LayoutInflater
@@ -59,6 +60,26 @@ class UploadScreen(private val ctx: AppContext) {
     private val progress2: ProgressBar = root.findViewById(R.id.progress2)
     private val smooth1 = SmoothProgress(progress1)
     private val smooth2 = SmoothProgress(progress2)
+
+    // Quick Edit upload: one bar per real step, each in its own colour (blue, purple, green)
+    private class StepRow(val status: TextView, val bar: ProgressBar, val smooth: SmoothProgress, val color: Int)
+
+    private val stepGroup: LinearLayout = root.findViewById(R.id.stepGroup)
+    private val steps: List<StepRow>
+
+    init {
+        val names = listOf("Clone", "Copy", "Push")
+        val colors = listOf(R.color.accent, R.color.step_copy, R.color.success)
+        steps = names.indices.map { i ->
+            val row = LayoutInflater.from(act).inflate(R.layout.item_upload_step, stepGroup, false)
+            row.findViewById<TextView>(R.id.textStepName).text = I18n.tr(names[i])
+            val bar = row.findViewById<ProgressBar>(R.id.progressStep)
+            val color = act.color(colors[i])
+            bar.progressTintList = ColorStateList.valueOf(color)
+            stepGroup.addView(row)
+            StepRow(row.findViewById(R.id.textStepStatus), bar, SmoothProgress(bar), color)
+        }
+    }
     private val commitWrap: View = root.findViewById(R.id.commitWrap)
     private val inputCommitMsg: EditText = root.findViewById(R.id.inputCommitMsg)
     private val btnDoUpload: MaterialButton = root.findViewById(R.id.btnDoUpload)
@@ -121,6 +142,7 @@ class UploadScreen(private val ctx: AppContext) {
         progressGroup.visibility = View.GONE
         smooth1.reset()
         smooth2.reset()
+        resetSteps()
         btnDoUpload.text = I18n.tr(if (zip) "Upload & Extract" else "Upload")
         messageEdited = false
         setMessage(if (zip) "Upload ZIP contents" else "Upload files")
@@ -223,9 +245,14 @@ class UploadScreen(private val ctx: AppContext) {
         root.hideKeyboard()
         smooth1.reset()
         smooth2.reset()
+        resetSteps()
         progressGroup.visibility = View.VISIBLE
 
-        if (state.editMode != EditMode.STAGE) {
+        // A commit-push upload has three real steps; staging is a single local copy
+        val push = state.editMode != EditMode.STAGE
+        stepGroup.visibility = if (push) View.VISIBLE else View.GONE
+        progress1.visibility = if (push) View.GONE else View.VISIBLE
+        if (push) {
             startPushTransfer()
             return
         }
@@ -288,7 +315,7 @@ class UploadScreen(private val ctx: AppContext) {
 
         if (t.isRunning) {
             if (t.label.isNotEmpty()) label1.text = t.label
-            if (t.fraction >= 0f) setProgress(progress1, t.fraction.toDouble())
+            renderSteps(t)
             if (t.itemIndex >= 0) {
                 val oneRow = summaryMode || mode == Mode.ZIP
                 setStatus(if (oneRow) 0 else t.itemIndex, if (oneRow) t.itemText else "Copying…", Kind.WORKING)
@@ -306,7 +333,7 @@ class UploadScreen(private val ctx: AppContext) {
         }
         when (t.state) {
             TransferState.SUCCESS -> {
-                setProgress(progress1, 1.0)
+                steps.forEach { stepDone(it) }
                 if (summaryMode) setStatus(0, "✓ $total files", Kind.DONE)
                 else if (mode == Mode.ZIP) setStatus(0, "✓ Done", Kind.DONE)
                 else markRows("✓", Kind.DONE)
@@ -318,10 +345,12 @@ class UploadScreen(private val ctx: AppContext) {
             }
             TransferState.FAILED -> {
                 // Nothing was committed: one push is all-or-nothing
+                failSteps(t, "Failed")
                 markRows("Failed", Kind.ERROR)
                 ctx.toast.error(t.message ?: "Upload failed", 8000)
             }
             TransferState.CANCELLED -> {
+                failSteps(t, "Cancelled")
                 markRows("Cancelled", Kind.ERROR)
                 ctx.toast.show("Upload cancelled")
             }
@@ -489,6 +518,56 @@ class UploadScreen(private val ctx: AppContext) {
                 }
             )
         )
+    }
+
+    // ── The three steps ──────────────────────────────────────────────────────
+
+    private fun resetSteps() {
+        steps.forEach {
+            it.smooth.reset()
+            it.bar.progressTintList = ColorStateList.valueOf(it.color)
+            it.status.text = ""
+            it.status.setTextColor(act.color(R.color.text_dim))
+        }
+    }
+
+    /** Finished steps show ✓, the current one its own progress, later ones stay empty. */
+    private fun renderSteps(t: Transfer) {
+        stepGroup.visibility = View.VISIBLE
+        progress1.visibility = View.GONE
+        steps.forEachIndexed { i, s ->
+            when {
+                i < t.step -> stepDone(s)
+                i == t.step -> {
+                    if (t.stepFraction >= 0f) s.smooth.set(t.stepFraction)
+                    s.status.text = t.stepStatus.ifEmpty { "…" }
+                    s.status.setTextColor(s.color)
+                }
+            }
+        }
+    }
+
+    private fun stepDone(s: StepRow) {
+        s.smooth.set(1f)
+        s.status.text = "✓"
+        s.status.setTextColor(s.color)
+    }
+
+    /** The step that was running when the upload stopped turns red, so it shows where it went wrong. */
+    private fun failSteps(t: Transfer, text: String) {
+        stepGroup.visibility = View.VISIBLE
+        progress1.visibility = View.GONE
+        steps.forEachIndexed { i, s ->
+            when {
+                i < t.step -> stepDone(s)
+                i == t.step -> {
+                    val danger = act.color(R.color.danger)
+                    s.bar.progressTintList = ColorStateList.valueOf(danger)
+                    s.status.text = I18n.tr(text)
+                    s.status.setTextColor(danger)
+                }
+            }
+        }
     }
 
     private fun setProgress(bar: ProgressBar, fraction: Double) {

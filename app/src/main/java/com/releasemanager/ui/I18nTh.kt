@@ -429,6 +429,15 @@ internal val TH_STRINGS: Map<String, String> = mapOf(
     "No releases published" to "ยังไม่มี release",
     "Inactive" to "ไม่ใช้งาน",
 
+    // ── Upload progress setting ──
+    "Upload progress" to "ความคืบหน้าการอัปโหลด",
+    "Detailed (3 bars)" to "แบบละเอียด (3 หลอด)",
+    "Compact (1 bar)" to "แบบกะทัดรัด (1 หลอด)",
+    "Detailed · 3 bars" to "แบบละเอียด · 3 หลอด",
+    "Compact · 1 bar" to "แบบกะทัดรัด · 1 หลอด",
+    "Clone, Copy and Push, each with its own progress" to "Clone, Copy และ Push แยกหลอดตามความคืบหน้าจริงของแต่ละขั้น",
+    "A single bar showing the overall progress" to "หลอดเดียวแสดงความคืบหน้ารวม",
+
     // ── Release page ──
     "Latest" to "ล่าสุด",
     "Assets" to "ไฟล์แนบ",

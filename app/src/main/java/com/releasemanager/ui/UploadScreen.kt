@@ -13,6 +13,7 @@ import android.widget.TextView
 import androidx.core.widget.doAfterTextChanged
 import com.google.android.material.button.MaterialButton
 import com.releasemanager.R
+import com.releasemanager.data.AppSettings
 import com.releasemanager.data.EditMode
 import com.releasemanager.data.STAGED_DIR
 import com.releasemanager.data.StagedFile
@@ -250,8 +251,9 @@ class UploadScreen(private val ctx: AppContext) {
 
         // A commit-push upload has three real steps; staging is a single local copy
         val push = state.editMode != EditMode.STAGE
-        stepGroup.visibility = if (push) View.VISIBLE else View.GONE
-        progress1.visibility = if (push) View.GONE else View.VISIBLE
+        val detailed = push && useSteps()
+        stepGroup.visibility = if (detailed) View.VISIBLE else View.GONE
+        progress1.visibility = if (detailed) View.GONE else View.VISIBLE
         if (push) {
             startPushTransfer()
             return
@@ -333,7 +335,7 @@ class UploadScreen(private val ctx: AppContext) {
         }
         when (t.state) {
             TransferState.SUCCESS -> {
-                steps.forEach { stepDone(it) }
+                if (useSteps()) steps.forEach { stepDone(it) } else setProgress(progress1, 1.0)
                 if (summaryMode) setStatus(0, "✓ $total files", Kind.DONE)
                 else if (mode == Mode.ZIP) setStatus(0, "✓ Done", Kind.DONE)
                 else markRows("✓", Kind.DONE)
@@ -522,6 +524,9 @@ class UploadScreen(private val ctx: AppContext) {
 
     // ── The three steps ──────────────────────────────────────────────────────
 
+    /** The "Upload progress" setting: three bars (one per step) or a single overall bar. */
+    private fun useSteps() = AppSettings.uploadBars(act) != AppSettings.BARS_COMPACT
+
     private fun resetSteps() {
         steps.forEach {
             it.smooth.reset()
@@ -533,6 +538,12 @@ class UploadScreen(private val ctx: AppContext) {
 
     /** Finished steps show ✓, the current one its own progress, later ones stay empty. */
     private fun renderSteps(t: Transfer) {
+        if (!useSteps()) {
+            stepGroup.visibility = View.GONE
+            progress1.visibility = View.VISIBLE
+            if (t.fraction >= 0f) setProgress(progress1, t.fraction.toDouble())
+            return
+        }
         stepGroup.visibility = View.VISIBLE
         progress1.visibility = View.GONE
         steps.forEachIndexed { i, s ->
@@ -555,6 +566,7 @@ class UploadScreen(private val ctx: AppContext) {
 
     /** The step that was running when the upload stopped turns red, so it shows where it went wrong. */
     private fun failSteps(t: Transfer, text: String) {
+        if (!useSteps()) return
         stepGroup.visibility = View.VISIBLE
         progress1.visibility = View.GONE
         steps.forEachIndexed { i, s ->

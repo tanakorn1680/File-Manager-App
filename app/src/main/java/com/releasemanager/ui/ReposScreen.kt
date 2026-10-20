@@ -136,7 +136,29 @@ class ReposScreen(private val ctx: AppContext) {
                     "Language", R.drawable.ic_globe,
                     sub = if (I18n.isThai) "ไทย" else "English",
                     onClick = { openLanguageSheet() }
+                ),
+                Dialogs.SheetItem(
+                    "Upload progress", R.drawable.ic_upload,
+                    sub = if (AppSettings.uploadBars(ctx.activity) == AppSettings.BARS_COMPACT) "Compact · 1 bar" else "Detailed · 3 bars",
+                    onClick = { openUploadProgressSheet() }
                 )
+            )
+        )
+    }
+
+    private fun openUploadProgressSheet() {
+        val current = AppSettings.uploadBars(ctx.activity)
+        fun item(bars: Int, name: String, description: String) = Dialogs.SheetItem(
+            (if (current == bars) "✓ " else "") + name, R.drawable.ic_upload,
+            sub = description,
+            onClick = { AppSettings.setUploadBars(ctx.activity, bars) }
+        )
+        Dialogs.sheet(
+            ctx.activity,
+            "Upload progress",
+            listOf(
+                item(AppSettings.BARS_DETAILED, "Detailed (3 bars)", "Clone, Copy and Push, each with its own progress"),
+                item(AppSettings.BARS_COMPACT, "Compact (1 bar)", "A single bar showing the overall progress")
             )
         )
     }

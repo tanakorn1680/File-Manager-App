@@ -188,6 +188,17 @@
                 android:text="Upload"
                 android:visibility="gone"
                 app:icon="@drawable/ic_upload" />
+
+            <!-- Takes the place of the Upload button while a push runs -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnCancelUpload"
+                style="@style/Widget.App.DangerButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="Cancel"
+                android:visibility="gone"
+                app:icon="@drawable/ic_close" />
         </LinearLayout>
     </ScrollView>
 </LinearLayout>

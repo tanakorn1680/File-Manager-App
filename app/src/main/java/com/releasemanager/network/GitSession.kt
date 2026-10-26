@@ -74,7 +74,14 @@ class GitSession private constructor(
         return target
     }
 
-    suspend fun commitAndPush(message: String) = withContext(Dispatchers.IO) {
+    /**
+     * Commits what was added and pushes it. Returns true when something was pushed.
+     *
+     * [batch] marks one push of several in a very large upload: files identical to what the repo already has
+     * are skipped (false is returned, which is what lets a retried upload carry on where it stopped), and the
+     * working copy of the files just pushed is deleted so the next batch has room on the device.
+     */
+    suspend fun commitAndPush(message: String, batch: Boolean = false): Boolean = withContext(Dispatchers.IO) {
         val job = currentCoroutineContext()[Job]
         try {
             report(GitPhase.OTHER, "Preparing commit…", -1)
@@ -88,6 +95,10 @@ class GitSession private constructor(
                     .setAuthor(ident).setCommitter(ident)
                     .setAllowEmpty(false).setSign(false).call().name
             } catch (e: EmptyCommitException) {
+                if (batch) {
+                    discardAdded()
+                    return@withContext false
+                }
                 throw GitHubApiException("Nothing to commit — these files are identical to what is already in the repo.", 0)
             }
 
@@ -123,9 +134,17 @@ class GitSession private constructor(
                     }
                 }
             }
+            if (batch) discardAdded()
+            true
         } catch (e: Throwable) {
             throw friendly(e)
         }
+    }
+
+    /** Deletes the working copy of the files added since the last commit (they are in the commit, and on GitHub). */
+    private fun discardAdded() {
+        paths.forEach { File(dir, it).delete() }
+        paths.clear()
     }
 
     /** Always call this (finally): releases the repo and deletes the working copy. */

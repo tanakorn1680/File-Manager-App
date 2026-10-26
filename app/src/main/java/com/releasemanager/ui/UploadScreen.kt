@@ -22,6 +22,7 @@ import com.releasemanager.network.UploadJobs
 import com.releasemanager.network.UriAccess
 import com.releasemanager.network.ZipScan
 import com.releasemanager.service.Transfer
+import com.releasemanager.service.TransferManager
 import com.releasemanager.service.TransferKind
 import com.releasemanager.service.TransferState
 import com.releasemanager.util.formatSize
@@ -84,6 +85,10 @@ class UploadScreen(private val ctx: AppContext) {
     private val commitWrap: View = root.findViewById(R.id.commitWrap)
     private val inputCommitMsg: EditText = root.findViewById(R.id.inputCommitMsg)
     private val btnDoUpload: MaterialButton = root.findViewById(R.id.btnDoUpload)
+    private val btnCancelUpload: MaterialButton = root.findViewById(R.id.btnCancelUpload)
+
+    /** The batch the step bars were last drawn for: a new batch starts its Copy and Push bars again. */
+    private var renderedBatch = 0
 
     private var mode = Mode.FILES
     private var picked: List<Picked> = emptyList()
@@ -102,6 +107,7 @@ class UploadScreen(private val ctx: AppContext) {
         root.findViewById<ImageButton>(R.id.btnBack).setOnClickListener { ctx.show(Screen.FILES) }
         dropZone.setOnClickListener { pick() }
         btnDoUpload.setOnClickListener { startUpload() }
+        btnCancelUpload.setOnClickListener { cancelUpload() }
         inputCommitMsg.doAfterTextChanged { if (!settingMessage) messageEdited = true }
     }
 
@@ -140,6 +146,7 @@ class UploadScreen(private val ctx: AppContext) {
         fileList.visibility = View.GONE
         commitWrap.visibility = View.GONE
         btnDoUpload.visibility = View.GONE
+        btnCancelUpload.visibility = View.GONE
         progressGroup.visibility = View.GONE
         smooth1.reset()
         smooth2.reset()
@@ -255,6 +262,7 @@ class UploadScreen(private val ctx: AppContext) {
         stepGroup.visibility = if (detailed) View.VISIBLE else View.GONE
         progress1.visibility = if (detailed) View.GONE else View.VISIBLE
         if (push) {
+            showCancel(true)
             startPushTransfer()
             return
         }
@@ -273,7 +281,8 @@ class UploadScreen(private val ctx: AppContext) {
 
     /**
      * Quick Edit (web: doFilesUpload / doZipUpload): clone, copy the files in, ONE commit, ONE git push — any
-     * number of files, any size up to GitHub's 100 MB, nothing read into memory. It runs in TransferService, so
+     * number of files, any size up to GitHub's 100 MB, nothing read into memory. A ZIP whose files add up to
+     * more than [PUSH_BATCH_BYTES] goes up in several pushes instead (see pushSources). It runs in TransferService, so
      * closing the app does not stop it; progress is shown here while the screen is open and in the notification.
      */
     private fun startPushTransfer() {
@@ -282,6 +291,7 @@ class UploadScreen(private val ctx: AppContext) {
         if (api == null || repo == null) {
             ctx.toast.error(if (api == null) "Not connected to GitHub" else "No repository selected")
             uploading = false
+            showCancel(false)
             btnDoUpload.isEnabled = true
             progressGroup.visibility = View.GONE
             return
@@ -327,6 +337,7 @@ class UploadScreen(private val ctx: AppContext) {
 
         transfer = null
         uploading = false
+        showCancel(false)
         btnDoUpload.isEnabled = true
         val total = picked.size
         fun markRows(text: String, kind: Kind) {
@@ -346,7 +357,7 @@ class UploadScreen(private val ctx: AppContext) {
                 }
             }
             TransferState.FAILED -> {
-                // Nothing was committed: one push is all-or-nothing
+                // One push is all-or-nothing; a batched upload says in its message how far it got
                 failSteps(t, "Failed")
                 markRows("Failed", Kind.ERROR)
                 ctx.toast.error(t.message ?: "Upload failed", 8000)
@@ -354,7 +365,11 @@ class UploadScreen(private val ctx: AppContext) {
             TransferState.CANCELLED -> {
                 failSteps(t, "Cancelled")
                 markRows("Cancelled", Kind.ERROR)
-                ctx.toast.show("Upload cancelled")
+                // Batches that were already pushed stay in the repository
+                ctx.toast.show(
+                    if (t.batchCount > 1 && t.batch > 0) "Upload cancelled — ${t.batch} of ${t.batchCount} batches were already uploaded"
+                    else "Upload cancelled"
+                )
             }
             TransferState.RUNNING -> Unit
         }
@@ -524,16 +539,34 @@ class UploadScreen(private val ctx: AppContext) {
 
     // ── The three steps ──────────────────────────────────────────────────────
 
+    /** While a push runs the Upload button gives way to Cancel; they swap back when it ends. */
+    private fun showCancel(show: Boolean) {
+        btnDoUpload.visibility = if (show) View.GONE else View.VISIBLE
+        btnCancelUpload.visibility = if (show) View.VISIBLE else View.GONE
+        btnCancelUpload.isEnabled = true
+        btnCancelUpload.text = I18n.tr("Cancel")
+    }
+
+    private fun cancelUpload() {
+        val t = transfer ?: return
+        btnCancelUpload.isEnabled = false
+        btnCancelUpload.text = I18n.tr("Cancelling…")
+        TransferManager.cancel(t.id)
+    }
+
     /** The "Upload progress" setting: three bars (one per step) or a single overall bar. */
     private fun useSteps() = AppSettings.uploadBars(act) != AppSettings.BARS_COMPACT
 
     private fun resetSteps() {
-        steps.forEach {
-            it.smooth.reset()
-            it.bar.progressTintList = ColorStateList.valueOf(it.color)
-            it.status.text = ""
-            it.status.setTextColor(act.color(R.color.text_dim))
-        }
+        renderedBatch = 0
+        steps.forEach { resetStep(it) }
+    }
+
+    private fun resetStep(s: StepRow) {
+        s.smooth.reset()
+        s.bar.progressTintList = ColorStateList.valueOf(s.color)
+        s.status.text = ""
+        s.status.setTextColor(act.color(R.color.text_dim))
     }
 
     /** Finished steps show ✓, the current one its own progress, later ones stay empty. */
@@ -546,6 +579,11 @@ class UploadScreen(private val ctx: AppContext) {
         }
         stepGroup.visibility = View.VISIBLE
         progress1.visibility = View.GONE
+        if (t.batch != renderedBatch) {
+            // The next batch of a very large upload: its Copy and Push bars start again, the clone stays done
+            renderedBatch = t.batch
+            for (i in 1 until steps.size) resetStep(steps[i])
+        }
         steps.forEachIndexed { i, s ->
             when {
                 i < t.step -> stepDone(s)

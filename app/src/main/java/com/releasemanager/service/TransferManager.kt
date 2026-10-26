@@ -63,6 +63,13 @@ class Transfer internal constructor(
     @Volatile var stepStatus: String = ""
         internal set
 
+    /** A very large upload goes up in several pushes: the one being worked on (from 0) and how many there are. */
+    @Volatile var batch: Int = 0
+        internal set
+
+    @Volatile var batchCount: Int = 1
+        internal set
+
     /** Result text once finished (success message, error message, or "Cancelled"). */
     @Volatile var message: String? = null
         internal set
@@ -119,6 +126,24 @@ class TransferProgress internal constructor(private val t: Transfer) {
         if (label != null) t.label = label
         // A new step is always passed on at once, so a short one is not skipped by the rate limit
         TransferManager.changed(t, force = stepChanged)
+    }
+
+    /**
+     * The next batch of a multi-push upload begins: it starts again at step [firstStep] (the clone is done).
+     * The only place a transfer's step may move back.
+     */
+    fun beginBatch(index: Int, count: Int, firstStep: Int) {
+        synchronized(t) {
+            t.batch = index
+            t.batchCount = count
+            if (index > 0) {
+                t.step = firstStep
+                t.stepPeak = 0f
+                t.stepFraction = 0f
+                t.stepStatus = ""
+            }
+        }
+        TransferManager.changed(t, force = true)
     }
 
     fun label(text: String) {

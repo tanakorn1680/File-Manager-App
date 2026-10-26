@@ -430,6 +430,8 @@ internal val TH_STRINGS: Map<String, String> = mapOf(
     "Inactive" to "ไม่ใช้งาน",
 
     // ── Upload progress setting ──
+    "Cancelling…" to "กำลังยกเลิก…",
+    "Upload cancelled — %s of %s batches were already uploaded" to "ยกเลิกแล้ว — อัปโหลดไปแล้ว %s จาก %s batch",
     "Upload progress" to "ความคืบหน้าการอัปโหลด",
     "Detailed (3 bars)" to "แบบละเอียด (3 หลอด)",
     "Compact (1 bar)" to "แบบกะทัดรัด (1 หลอด)",

@@ -6,6 +6,7 @@ import android.net.Uri
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import com.releasemanager.data.FileEntry
+import com.releasemanager.data.GitHubApiException
 import com.releasemanager.service.TransferOutcome
 import com.releasemanager.service.TransferProgress
 import com.releasemanager.util.copyStream
@@ -34,7 +35,34 @@ import java.util.zip.ZipOutputStream
 class PickedSource(val uri: Uri, val name: String)
 
 /** One file to put into the clone: [open] is called on a background thread. */
-class PushSource(val path: String, val open: () -> InputStream)
+class PushSource(val path: String, val size: Long = 0L, val open: () -> InputStream)
+
+/**
+ * One push carries at most about this many bytes of files. An upload of that size or less (the usual case) is
+ * ONE commit and ONE push; a bigger one (a ZIP with a great many files) goes up in several, so a dropped
+ * connection costs one batch, not everything, and the device never holds more than one batch's working copy.
+ */
+const val PUSH_BATCH_BYTES = 500L * 1024 * 1024
+
+/** The sources in order, cut into batches of at most [limit] bytes; a single batch when the total fits. */
+fun splitIntoBatches(sources: List<PushSource>, limit: Long = PUSH_BATCH_BYTES): List<List<PushSource>> {
+    if (sources.sumOf { it.size.coerceAtLeast(0L) } <= limit) return listOf(sources)
+    val batches = ArrayList<List<PushSource>>()
+    var current = ArrayList<PushSource>()
+    var bytes = 0L
+    for (s in sources) {
+        val size = s.size.coerceAtLeast(0L)
+        if (current.isNotEmpty() && bytes + size > limit) {
+            batches.add(current)
+            current = ArrayList()
+            bytes = 0L
+        }
+        current.add(s)
+        bytes += size
+    }
+    if (current.isNotEmpty()) batches.add(current)
+    return batches
+}
 
 /**
  * Document Uris from the system pickers are only readable while the Activity that received them is alive,
@@ -223,7 +251,8 @@ private fun stepReport(phase: GitPhase, text: String, pct: Int): StepReport? {
 /**
  * Clone → copy every source in → one commit → one push. Each step reports its own real progress (see
  * [stepReport]); the notification's single bar still gets the combined estimate of [gitFraction]. Neither
- * moves backwards.
+ * moves backwards. An upload over [PUSH_BATCH_BYTES] is cut into batches (see [splitIntoBatches]) that each
+ * go through copy → commit → push on the same clone. Returns the number of pushes made.
  */
 suspend fun pushSources(
     api: GitHubApi,
@@ -233,31 +262,72 @@ suspend fun pushSources(
     message: String,
     sources: List<PushSource>,
     progress: TransferProgress
-) {
+): Int {
     val total = sources.size
+    val batches = splitIntoBatches(sources)
+    val count = batches.size
+    var current = 0
+
+    fun prefix() = if (count > 1) "Batch ${current + 1}/$count · " else ""
+
+    /** Where the whole upload sits when the current batch is [local] (0..1) of the way through. */
+    fun overall(local: Float) = (current + local) / count
+
     progress.step(STEP_CLONE, -1f, "", 0f, "Cloning $repo…")
     val session = api.openGitSession(cacheDir, repo, branch) { phase, text, pct ->
-        val overall = gitFraction(phase, text, pct)
+        val local = gitFraction(phase, text, pct)
         val report = stepReport(phase, text, pct)
-        if (overall >= 0f && report != null) {
-            progress.step(report.step, report.fraction, report.status, overall, text)
-        } else if (overall >= 0f) {
-            progress.update(overall, text)
+        if (local >= 0f && report != null) {
+            progress.step(report.step, report.fraction, report.status, overall(local), prefix() + text)
+        } else if (local >= 0f) {
+            progress.update(overall(local), prefix() + text)
         } else {
-            progress.label(text)
+            progress.label(prefix() + text)
         }
     }
+    var pushes = 0
+    var copied = 0
     try {
-        for ((i, src) in sources.withIndex()) {
-            progress.item(i, "Copying ${i + 1}/$total…")
-            progress.step(STEP_COPY, i.toFloat() / total, "${i + 1}/$total", 0.15f + i.toFloat() / total * 0.10f, "Copying ${i + 1}/$total…")
-            session.addFile(src.path, src.open)
+        for ((b, batch) in batches.withIndex()) {
+            current = b
+            progress.beginBatch(b, count, STEP_COPY)
+            val n = batch.size
+            for ((j, src) in batch.withIndex()) {
+                progress.item(copied + j, "Copying ${copied + j + 1}/$total…")
+                progress.step(
+                    STEP_COPY, j.toFloat() / n, "${j + 1}/$n",
+                    overall(0.15f + j.toFloat() / n * 0.10f), "${prefix()}Copying ${j + 1}/$n…"
+                )
+                session.addFile(src.path, src.open)
+            }
+            copied += n
+            progress.step(STEP_COPY, 1f, "$n/$n", overall(0.25f))
+            progress.step(STEP_PUSH, -1f, "", overall(0.25f), prefix() + "Preparing commit…")
+            val commitMessage = if (count > 1) "$message (${b + 1}/$count)" else message
+            if (session.commitAndPush(commitMessage, batch = count > 1)) {
+                pushes++
+                api.notifyCommitted(repo, session.headSha)
+            }
         }
-        progress.step(STEP_COPY, 1f, "$total/$total", 0.25f)
-        progress.step(STEP_PUSH, -1f, "", 0.25f, "Preparing commit…")
-        session.commitAndPush(message)
-        api.notifyCommitted(repo, session.headSha)
+        if (pushes == 0) {
+            throw GitHubApiException("Nothing to commit — these files are identical to what is already in the repo.", 0)
+        }
         progress.step(STEP_PUSH, 1f, "100%", 1f, "Done")
+        return pushes
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        // Earlier batches are already on GitHub: say so, and how to carry on
+        if (count > 1 && current > 0) {
+            val status = (e as? GitHubApiException)?.httpStatus ?: 0
+            throw GitHubApiException(
+                "Batch ${current + 1} of $count failed: ${e.message}\n" +
+                    "Batches 1–$current are already in the repository. Upload the same ZIP again to carry on; " +
+                    "files that are already there are skipped.",
+                status
+            )
+        }
+        throw e
     } finally {
         session.close()
     }
@@ -330,8 +400,8 @@ object UploadJobs {
                 val tooBig = targets.firstOrNull { it.entry.size > GITHUB_MAX_FILE_BYTES }
                 if (tooBig != null) throw IOException(tooLargeMessage(tooBig.name, tooBig.entry.size))
 
-                val sources = targets.map { t -> PushSource(t.path) { zip.getInputStream(t.entry) } }
-                pushSources(api, cacheDir, repo, branch, message, sources, progress)
+                val sources = targets.map { t -> PushSource(t.path, t.entry.size) { zip.getInputStream(t.entry) } }
+                val pushes = pushSources(api, cacheDir, repo, branch, message, sources, progress)
 
                 val skipped = listOfNotNull(
                     scan.duplicateCount.takeIf { it > 0 }?.let { "$it duplicate" },
@@ -339,6 +409,7 @@ object UploadJobs {
                 )
                 TransferOutcome(
                     "Uploaded ${targets.size} files from ZIP" +
+                        (if (pushes > 1) " in $pushes pushes" else "") +
                         if (skipped.isNotEmpty()) " (skipped ${skipped.joinToString(", ")})" else ""
                 )
             }
